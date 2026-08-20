@@ -1,0 +1,21 @@
+# Copy to the consumer repository root as `.handoff.toml`, fill in, and keep
+# it untracked (gitignore it): standing authority is an operator fact, not a
+# repository fact, and never belongs in shared history. The handoff skill
+# reads only this file.
+
+[repository]
+# theory_homes = ["docs/SPEC.md", "docs/"]
+# Default: none declared; skills must not invent a ratified theory home.
+
+[contracts]
+# owns = ["protocol-name"]
+# Default: none. Contract ownership must not be inferred.
+
+# Optional standing merge authority. Leave absent unless deliberately granted.
+# [authority]
+# merge = true
+
+# Optional paths whose product requirements justify deeper performance review.
+# Leave absent for the default low-hanging-fruit-only review.
+# [performance]
+# critical_paths = ["path/to/performance-critical/code"]

@@ -1,0 +1,10 @@
+# Operator-private working notes; never published.
+notes/
+
+# Untracked-by-convention evidence and machinery workspaces.
+.handoff/
+.scaffolding/
+
+# Local-only skill configuration; operator facts never enter shared history.
+.handoff.toml
+.tasks.toml

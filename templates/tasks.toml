@@ -1,0 +1,19 @@
+# Copy to the consumer repository root as `.tasks.toml`, fill in, and keep it
+# untracked (gitignore it): backend choice, sibling repos, and authority are
+# operator facts, not repository facts, and never belong in shared history.
+# The tasks skill reads only this file.
+
+[backend]
+# provider = "linear"          # Omit to use filed.md outboxes.
+# workspace = "workspace"     # Default: sole authenticated workspace; ambiguity degrades.
+# team = "ENG"                # Default: sole accessible team; ambiguity degrades for writes.
+# ready_state = "Todo"        # Default: the team's ordinary unstarted state.
+
+[repository]
+# name = "repo-name"          # Default: repository-root directory name.
+# known = ["repo-name"]       # Default: only `name`; used for garden repo assignment.
+
+# Optional standing authority for external task writes (file, link, close,
+# promote). Leave absent unless deliberately granted.
+# [authority]
+# external_write = true
