@@ -47,6 +47,6 @@ clear commit message — no handoff.
 
 Machinery: `.` (authoritative rules in `docs/SPEC.md`).
 
-Repo config: `.handoff.toml` and `.tasks.toml`, local-only and untracked
-(operator facts never enter shared history); reference copies live under
-`templates/`.
+Repo config: `.handoff.toml`, local-only and untracked. Tasks configuration
+is operator-global at `~/.config/tasks/config.toml`. Reference copies live
+under `templates/`; operator facts never enter shared history.

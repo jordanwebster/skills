@@ -23,10 +23,20 @@ call a backend outside their bindings.
 | `close(ref, reason, idempotency_input)` | Move a task to the appropriate completed or canceled state and read it back. |
 | `promote(ref, endorsement, operation_key)` | Move a braindump to ready after the operator's live endorsement and read the lane back. |
 
-Read backend selection and repository identity from the consumer's
-`.tasks.toml` — this skill's own configuration file, kept untracked at the
-repository root. Require every task to carry exactly one `repo:<name>` label
-matching its assigned repo.
+Read configuration from the operator's global file — `$TASKS_CONFIG` if
+set, else `~/.config/tasks/config.toml` — because backend choice, the repo
+portfolio, and authority are operator facts at machine scope, not
+repository facts. It holds the backend, one `[repos.<name>]` entry per
+portfolio repo (a one-line `description`, which is what makes repo
+assignment during shaping correct rather than a guess from the name, and an
+optional machine-local `path` for when an agent must actually read or enter
+that repo), and authority grants keyed by repo name. The current
+repository's identity is its directory name unless an optional untracked
+`.tasks.toml` at the repo root overrides `name`. When a repo-registry tool
+is configured, resolve names, descriptions, paths, and worktrees through it
+and treat the file as the fallback; that slot is reserved and empty until
+such a tool exists. Require every task to carry exactly one `repo:<name>`
+label matching its assigned repo.
 
 ## Bind Linear
 
@@ -130,4 +140,9 @@ task storage failed.
 
 Allow `get` and `neighbors` without authorization. Perform no external write
 through `file`, `link`, `close`, or `promote` without the operator's word in
-the current conversation or standing authority in `.tasks.toml`.
+the current conversation or a standing grant for the target repo in the
+global configuration's authority table — grants are keyed by repo name so
+the operator can audit every grant in one place, and a repo without a grant
+gets no writes. The portfolio file names every repo gardening may file
+into; that reach is deliberate, and the per-repo authority keying is its
+bound.

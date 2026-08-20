@@ -40,10 +40,15 @@ A consumer repository has only two pieces of configuration:
 1. Copy the trigger sections you want from `templates/AGENTS-handoff.md` and
    `templates/AGENTS-scaffold.md` into `AGENTS.md`, replacing the machinery
    placeholder with the absolute path to this checkout.
-2. Copy `templates/handoff.toml` to `.handoff.toml` and `templates/tasks.toml`
-   to `.tasks.toml` at the repository root, set the values, and keep both
-   untracked (gitignore them) — backend choice, sibling repos, and standing
-   authority are operator facts that never belong in shared history.
+2. Copy `templates/handoff.toml` to `.handoff.toml` at the repository root,
+   set the values, and keep it untracked (gitignore it) — standing authority
+   is an operator fact that never belongs in shared history.
+
+Tasks needs no per-repo setup: copy `templates/tasks.toml` once to
+`~/.config/tasks/config.toml` (backend, repo portfolio with descriptions and
+optional paths, authority grants keyed by repo). A repo's identity defaults
+to its directory name; an untracked `.tasks.toml` with a `name` override
+exists only for repos whose directory name is wrong.
 
 Do not create `docs/decisions/` during installation. Handoff creates that
 directory only when the operator makes the first ratified decision that needs

@@ -1,7 +1,9 @@
-# Copy to the consumer repository root as `.tasks.toml`, fill in, and keep it
-# untracked (gitignore it): backend choice, sibling repos, and authority are
-# operator facts, not repository facts, and never belong in shared history.
-# The tasks skill reads only this file.
+# Operator-global tasks configuration. Copy to ~/.config/tasks/config.toml
+# (or point $TASKS_CONFIG at it). This is operator/machine-scope config —
+# backend, repo portfolio, authority — and never lives in a repository.
+#
+# When a repo-registry tool is configured, names, descriptions, paths, and
+# worktrees resolve through it; this file is the fallback.
 
 [backend]
 # provider = "linear"          # Omit to use filed.md outboxes.
@@ -9,11 +11,16 @@
 # team = "ENG"                # Default: sole accessible team; ambiguity degrades for writes.
 # ready_state = "Todo"        # Default: the team's ordinary unstarted state.
 
-[repository]
-# name = "repo-name"          # Default: repository-root directory name.
-# known = ["repo-name"]       # Default: only `name`; used for garden repo assignment.
+# One entry per portfolio repo. The description is load-bearing: it is what
+# lets shaping assign a task to the right repo instead of guessing from the
+# name. The path is optional and machine-local, for when an agent must read
+# or enter the repo.
+# [repos.example]
+# description = "One line saying what this repo is and owns"
+# path = "~/source/example"
 
-# Optional standing authority for external task writes (file, link, close,
-# promote). Leave absent unless deliberately granted.
+# Authority grants for external task writes (file, link, close, promote),
+# keyed by repo name — one auditable place for every grant. A repo not
+# listed gets no writes without the operator's in-conversation word.
 # [authority]
-# external_write = true
+# external_write = ["example"]

@@ -653,3 +653,18 @@ the reversal was explicit and knowing, not a silent re-litigation.
   facts, never repository facts, and never enter shared history. This
   removes the last configuration coupling between skills; each skill is
   fully independent by copying its directory.
+- **(2026-08-21) Configuration lives at the scope of the fact it states.**
+  Tasks configuration moves to the operator's global file
+  (`$TASKS_CONFIG`, else `~/.config/tasks/config.toml`): the backend, the
+  repo portfolio as `[repos.<name>]` entries carrying a load-bearing
+  one-line description (what makes shaping's repo assignment correct) and
+  an optional machine-local path, and authority grants keyed by repo name —
+  one auditable place for every grant, and the deliberate bound on the
+  portfolio-wide filing reach. A repo's identity defaults to its directory
+  name; an untracked per-repo `.tasks.toml` survives only as a `name`
+  override. When a repo-registry tool is configured, names, descriptions,
+  paths, and worktrees resolve through it with the file as fallback — the
+  slot is reserved and empty until such a tool exists. `.handoff.toml`
+  (theory homes, contracts, merge authority, performance paths) stays
+  per-repo; its keys are repo facts except merge authority, whose move to
+  the same global-keyed shape is deliberately deferred.
