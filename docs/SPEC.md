@@ -668,3 +668,16 @@ the reversal was explicit and knowing, not a silent re-litigation.
   (theory homes, contracts, merge authority, performance paths) stays
   per-repo; its keys are repo facts except merge authority, whose move to
   the same global-keyed shape is deliberately deferred.
+- **(2026-08-22) The staffing log is removed before it ever ran.** Its
+  premise split in two under examination: the cost half ("what do my
+  agents cost, by role") is real but belongs to whatever usage meter the
+  operator runs, not to a parallel text log; the performance half
+  ("roster corrections need recorded per-dispatch evidence") is false at
+  single-operator scale for the same reason the audit was parked — the
+  operator reads every result and is the evidence base. Escalations are
+  recorded as ordinary judgment decisions in the consuming run's ledger.
+  In its place, a temporary calibration channel: the global agent
+  configuration instructs agents to append one-line friction notes about
+  the skills themselves to `~/.local/state/agent-skills/feedback.log`,
+  folded into skill-revision batches; the instruction is removed once a
+  full batch yields almost nothing actionable.

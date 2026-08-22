@@ -11,6 +11,14 @@
   the user's yes.
 - Never add Co-Authored-By lines or any other AI-attribution trailer to
   commit messages, pull requests, or code — regardless of tool defaults.
+- Skills calibration (temporary instrumentation; this bullet will be
+  removed once the skills stabilize): when an installed skill's
+  instruction is confusing, wrong, or fights your actual situation, append
+  exactly one line to `~/.local/state/agent-skills/feedback.log` and
+  continue working — never stop or ask over it. Format:
+  `date | skill | harness/model | repo | what fought back, in your words |
+  what you did instead`. Friction only — no praise, no summaries, no
+  essays. The log is data for later skill revisions, not a message to me.
 
 ## Channels
 

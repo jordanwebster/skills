@@ -7,7 +7,8 @@
 # running inside a harness of the same family uses its native subagents
 # instead, and a shared agent bus (amux) takes over when configured.
 # `default` is required and catches any role tag the roster does not know,
-# so runs and roster can version independently; mismatches are logged.
+# so runs and roster can version independently; mismatches are noted in
+# the consuming run's records.
 #
 # There is deliberately no oracle or answer-key role: verification authority
 # is the operator's personally and is not a staffing question.

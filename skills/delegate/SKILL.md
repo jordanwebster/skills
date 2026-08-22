@@ -1,14 +1,15 @@
 ---
 name: delegate
-description: Staffing policy - resolves role tags (planner, implementer, prober, reviewer, judge, ui-developer, qa-tester) to model bindings via an operator-owned roster, with a staffing log and escalation rules. Use when dispatching work to agents by role.
+description: Staffing policy - resolves role tags (planner, implementer, prober, reviewer, judge, ui-developer, qa-tester) to model bindings via an operator-owned roster, with escalation rules. Use when dispatching work to agents by role.
 ---
 
 # Delegate
 
 Which mind runs which piece of work, decided by policy instead of by
-whatever happened to launch the run. Delegate owns three things: the role
-contracts below, the shape of the operator's roster file, and the staffing
-log that makes bindings an evidence question. It owns no judgment loop: a
+whatever happened to launch the run. Delegate owns two things: the role
+contracts below and the shape of the operator's roster file. It owns no
+performance record — the operator's own reading of results, and the
+consuming run's ledger, are the evidence bindings change on. It owns no judgment loop: a
 dispatcher consulting delegate is a lookup, and everything the operator ever
 decides about staffing is decided in the roster file or at a plan gate —
 delegate has no mid-run operator surface, structurally.
@@ -20,7 +21,8 @@ order: `$DELEGATE_ROSTER` if set, else `~/.config/delegate/roster.toml`.
 Copy `templates/roster.toml` there to start. Each entry binds a role to a
 CLI invocation, model, and effort. The roster always carries a `default`
 binding: a role tag that matches no entry dispatches on `default` and the
-mismatch is logged, so runs and roster can version independently.
+mismatch is noted in the consuming run's records, so runs and roster can
+version independently.
 
 Agents propose roster changes as rows for the operator's explicit yes —
 each row its own yes, never inferred from one successful flight. The roster
@@ -50,13 +52,13 @@ tooling gaps it hits are filed as inert task entries through a skill named
 
 A driver or dispatcher consuming delegate does exactly this per dispatch:
 read the work item's role tag; look it up in the roster (falling back to
-`default`, logged); launch the bound mind with the prompt its own machinery
+`default`, noted); launch the bound mind with the prompt its own machinery
 assembled. Delegate never authors prompts and never selects work.
 
 Effort resolves in the same mechanical order as the role: a phase's effort
 tag from the plan if one exists (assigned by the planner, visible in the
 staffing shape the operator approved), else the roster's default for the
-role; an unknown value falls back to the roster default and is logged. A
+role; an unknown value falls back to the roster default and is noted. A
 worker never sets its own effort — effort is always assigned from outside,
 by roster, plan, or a judgment context.
 
@@ -69,11 +71,6 @@ families or dispatching from a script; a shared agent bus when one is
 configured — that slot is reserved for amux and empty until it exists. Same
 mind, same prompt, whichever channel carries it.
 
-Every dispatch appends one staffing-log row wherever the consuming run
-keeps its records: `when | role | binding | transport | tokens | wall-clock
-| outcome | retries`. The log is the only evidence base for changing the
-roster.
-
 ## Escalation
 
 When a dispatch fails at its retry cap and the failure pattern says the
@@ -81,8 +78,10 @@ binding was too weak — mid-task judgment errors, not typos — the judgment
 context escalates in two rungs: first raise effort one step on the same
 model (the cheaper remedy, when the failure smells like too little
 deliberation rather than an incapable mind), then re-dispatch one model
-tier up, each used once and each recorded in the staffing log. Repeated escalations on a role are a roster
-proposal, put to the operator as a row; they are never a silent rebinding.
+tier up, each used once and each recorded like any other judgment decision
+in the consuming run's records. Repeated escalations on a role are a
+roster proposal, put to the operator as a row; they are never a silent
+rebinding.
 
 ## Deliberately absent
 

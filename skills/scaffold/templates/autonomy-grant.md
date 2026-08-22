@@ -2,7 +2,7 @@
 
 Driver: a script, never an agent. Each cycle: select the next ready phase by
 the ledger's rule; resolve its role to a binding (roster default on no
-match, logged); assemble the segment prompt by concatenating the role
+match, noted); assemble the segment prompt by concatenating the role
 contract, plan, ledger, and previous segment's ledger notes; dispatch under
 the hang guard; run the verification command; flip what passed and record
 `verified_head`. On a trigger — retry cap, stall, revision batch due —
@@ -25,8 +25,6 @@ Stop-the-line triggers:
 - Criterion weakened without a recorded operator decision: `<firing mechanism>`
 - Verification command broken: `<firing mechanism>`
 - Quota or capacity exhausted: `<firing mechanism; pause until reset>`
-
-Staffing log: `<path; one row per dispatch: phase, role, binding, tokens, wall clock, outcome, retries>`
 
 Resume protocol (canonical — used by fresh segments, judgment contexts, and
 anyone attaching to the run): read every file in the scaffold workspace
