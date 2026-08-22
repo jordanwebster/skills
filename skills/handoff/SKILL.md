@@ -95,7 +95,10 @@ all three parts:
    user, and how the operator can check it by hand. Mandatory.
 
 Keep evidence text-first and measured in kilobytes; reference large media,
-never store it. Keep secrets, tokens, and private paths out; declare
+never store it. A demonstration script whose replay should outlive this
+handoff graduates into the repository (usually beside the tests) rather
+than living only in the evidence directory — the page and merge message
+may only carry replay commands that depend on the merged tree. Keep secrets, tokens, and private paths out; declare
 nondeterminism and redactions. Keep observation, comparison, and acceptance
 separate: a command that overwrites expected output is not proof, and
 accepting changed expected output is a promise change for the operator.
@@ -150,7 +153,17 @@ means the handoff is not ready to present.
 
 ## Write the front page
 
-One screen, four headings, in the product's vocabulary:
+Dispatch the page to a fresh context following `prompts/front-page.md`,
+supplied with the artifacts alone: base, head, and diff; outline; proofs
+and demonstrations; the review, all rounds; the freshness record; the
+working narrative and friction journal where they exist. A writer that
+never saw the working session cannot leak its vocabulary and can only
+claim what the artifacts support — and a page it cannot write exposes an
+artifact gap to fix, not a page to pad. Before presenting, check the
+returned page's facts against the artifacts yourself: identifiers, quoted
+numbers, and replay commands copied exactly.
+
+Four headings, in the product's vocabulary:
 
 ### WHAT CHANGED
 
