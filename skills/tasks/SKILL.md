@@ -49,7 +49,7 @@ schemas for argument spelling.
 | `get` | Use `get_issue` for an ID. Use `list_issues` for a selector, then `get_issue` when full context is absent. |
 | `neighbors` | Use `get_issue` to read blocking, blocked-by, related, duplicate, and parent/child context. Use `list_issues` only to resolve referenced issues. |
 | `file` | Use `list_issue_labels` and, when state selection is needed, `list_issue_statuses`; then use `create_issue`. Confirm the created identity with `get_issue`. |
-| `link` | Use `update_issue` with the schema's blocking, blocked-by, related, or duplicate field; then use `get_issue` to confirm both ends. Represent sibling and umbrella relationships as related links, not sub-issues. |
+| `link` | Use `update_issue` with the schema's relation field — the related-issue parameter is spelled `relatedTo`, not `related`. Relation edges are write-only through the Linear MCP (`get_issue` does not echo them), so record the link receipt as accepted rather than observed. Represent sibling and umbrella relationships as related links, not sub-issues. |
 | `close` | Use `list_issue_statuses`, `update_issue` with the team's matching completed or canceled state, then `get_issue`. |
 | `promote` | Use `list_issue_labels` and `list_issue_statuses`, then `update_issue` to remove `braindump`, preserve every other label, and select the team's ordinary unstarted state; confirm with `get_issue`. |
 

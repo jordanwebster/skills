@@ -3,7 +3,9 @@
 # explicit yes; only you write this file.
 #
 # Each binding names the mind: family (via cli), model, and optionally
-# effort. The cli/args lines are the fallback transport — a dispatcher
+# effort. `effort_arg` optionally records the exact flag or config key the
+# CLI accepts effort through, so dispatchers need no per-CLI knowledge.
+# The cli/args lines are the fallback transport — a dispatcher
 # running inside a harness of the same family uses its native subagents
 # instead, and a shared agent bus (amux) takes over when configured.
 # `default` is required and catches any role tag the roster does not know,
@@ -48,6 +50,7 @@ cli = "codex"
 args = ["exec"]
 model = "gpt-5.6-sol"
 effort = "high"
+effort_arg = "-c model_reasoning_effort=<effort>"
 # Cross-family checks require a family other than the author's; this
 # binding satisfies that when the author is claude. Adjust the model to
 # whatever your codex install runs.

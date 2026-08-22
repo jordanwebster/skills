@@ -34,6 +34,14 @@ below: an agent noticing this skill mid-small-fix declines; it does not
 adopt late. There is no lighter handoff tier; operator-requested scrutiny of
 small work is the inbound review mode, on request.
 
+The obligation attaches to the unit of work the operator will review and
+belongs to whoever presents it to them. A sub-agent working a delegated
+chunk of an enclosing run — a dispatcher's brief, a driver's segment —
+therefore inherits no handoff obligation of its own: it declines, delivers
+its evidence to its dispatcher, and never launches an independent review.
+A brief that names the review owner settles this before it can arise;
+absent one, delegated status alone decides.
+
 ## Locate the machinery
 
 Resolve the physical directory containing this file once. Set `skill_file`

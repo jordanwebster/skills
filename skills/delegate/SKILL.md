@@ -19,7 +19,10 @@ delegate has no mid-run operator surface, structurally.
 Concrete bindings live only in the operator-owned roster file, resolved in
 order: `$DELEGATE_ROSTER` if set, else `~/.config/delegate/roster.toml`.
 Copy `templates/roster.toml` there to start. Each entry binds a role to a
-CLI invocation, model, and effort. The roster always carries a `default`
+CLI invocation, model, and effort; an entry may also record `effort_arg`,
+the exact flag or config key its CLI accepts effort through (codex:
+`-c model_reasoning_effort=<effort>`), so a dispatcher never needs per-CLI
+knowledge. The roster always carries a `default`
 binding: a role tag that matches no entry dispatches on `default` and the
 mismatch is noted in the consuming run's records, so runs and roster can
 version independently.
@@ -55,6 +58,12 @@ read the work item's role tag; look it up in the roster (falling back to
 `default`, noted); launch the bound mind with the prompt its own machinery
 assembled. Delegate never authors prompts and never selects work.
 
+A brief dispatched into a repository whose own instructions trigger a
+review skill states who owns that review — a sub-agent must never have to
+infer its position in the run. The review skill's own rule (delegated
+chunks decline and report evidence upward) is the backstop when a brief
+forgets.
+
 Effort resolves in the same mechanical order as the role: a phase's effort
 tag from the plan if one exists (assigned by the planner, visible in the
 staffing shape the operator approved), else the roster's default for the
@@ -69,7 +78,10 @@ native subagent when dispatching from inside a harness of the same family
 session likewise for its own); the roster's CLI invocation when crossing
 families or dispatching from a script; a shared agent bus when one is
 configured — that slot is reserved for amux and empty until it exists. Same
-mind, same prompt, whichever channel carries it.
+mind, same prompt, whichever channel carries it. A native channel may
+honor only part of a binding — Claude's subagents take a model override
+but no effort setting; dispatch anyway and note the shortfall in the
+consuming run's records, never silently rebind.
 
 ## Escalation
 
