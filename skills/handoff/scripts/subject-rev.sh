@@ -31,7 +31,10 @@ without_handoffs() {
     done
 }
 
-if ! subject_oid=$(git ls-tree "${commit_oid}^{tree}" | without_handoffs | git mktree); then
+# Digest the filtered listing instead of building a tree object: the
+# subject is only ever compared for equality, and hash-object without -w
+# writes nothing, so this works in sandboxes that forbid touching .git.
+if ! subject_oid=$(git ls-tree "${commit_oid}^{tree}" | without_handoffs | git hash-object --stdin); then
     echo "subject-rev.sh: could not construct subject revision for $ref" >&2
     exit 1
 fi

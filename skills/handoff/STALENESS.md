@@ -3,11 +3,13 @@
 Evidence counts only for the exact tree being merged. The mechanism is one
 record and one rule.
 
-The **subject revision** is the Git tree object ID for a commit, with any
-tracked top-level `handoffs/` entry removed for compatibility with
-repositories that committed evidence historically. `subject-rev.sh` computes
-it. New evidence lives untracked under `.handoff/` and never affects the
-subject.
+The **subject revision** is a deterministic digest of a commit's tree
+listing, with any tracked top-level `handoffs/` entry removed for
+compatibility with repositories that committed evidence historically.
+`subject-rev.sh` computes it without writing any Git object, so it runs in
+sandboxes that forbid touching `.git`; the value is an identifier for
+equality comparison only, not a real tree object. New evidence lives
+untracked under `.handoff/` and never affects the subject.
 
 The **freshness record** is the single file `.handoff/<slug>/freshness`. Its
 first line is `subject=<oid>`, written by `stamp.sh <handoff-dir>` when

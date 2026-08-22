@@ -46,7 +46,11 @@ question.
 | `qa-tester` | Pokes at the product like a human: common flows, naive usage; reports what broke and what tooling gaps blocked further testing | Cheap on purpose — a too-clever agent works around rough edges instead of reporting them |
 
 qa-tester runs when a change is user-facing; when in doubt, run it — it is
-cheap. Its findings become citable evidence in whatever end-of-work report
+cheap. The dispatcher owns the environment it is sent into: before
+dispatch, probe every URL the brief will name for the exact content under
+test, and generate any initial-state description from a live query at
+dispatch time, never from memory — so every failure the qa-tester reports
+is about the product, not the harness. Its findings become citable evidence in whatever end-of-work report
 encloses the change, or a short note to the operator when none does; the
 tooling gaps it hits are filed as inert task entries through a skill named
 `tasks` when available and authorized, else an outbox row.

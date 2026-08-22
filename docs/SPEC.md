@@ -681,3 +681,14 @@ the reversal was explicit and knowing, not a silent re-litigation.
   the skills themselves to `~/.local/state/agent-skills/feedback.log`,
   folded into skill-revision batches; the instruction is removed once a
   full batch yields almost nothing actionable.
+
+- **(2026-08-23) The subject revision is a read-only digest, no longer a
+  written tree object.** `git mktree` writes to the object database, which
+  codex's workspace sandbox forbids — the first calibration-log entry was
+  an agent hitting that EPERM mid-handoff. Since the subject is only ever
+  compared for equality, `subject-rev.sh` now digests the filtered tree
+  listing with `git hash-object --stdin` (no `-w`, nothing written): same
+  determinism and the same invariants (evidence-only and untracked changes
+  never move it), zero Git writes. The value is no longer a real tree OID;
+  freshness records stamped before this change compare unequal to the new
+  computation and need one re-stamp.
