@@ -206,7 +206,15 @@ suppressed.
 
 ## Present, apply replies, and merge
 
-Present the front page in conversation and stop. Do not merge, close tasks,
+Default to presenting the front page as a self-contained HTML page when the
+harness can publish one (Claude's artifact surface is one; pages start
+private and the operator chooses who sees them): the same four sections,
+with the demonstration evidence itself embedded — screenshots, terminal
+transcripts, before/after pairs — so the operator sees the thing working
+instead of reading that it worked. The HTML page claims nothing the
+markdown front page does not; the markdown remains the canonical artifact.
+Where no publishing surface exists, present the markdown in conversation.
+Present and stop. Do not merge, close tasks,
 or perform any external write without the operator's word in that
 conversation or standing authority in `.handoff.toml`.
 
@@ -223,8 +231,12 @@ behavior, promises, or the front page, re-verify, re-stamp, and present the
 delta again before merge; trivial applications — a doc phrasing, a recorded
 decision — need no second round trip.
 
-Distill the front page into the merge commit message; any replay command
-kept there must depend only on the merged tree, never on files under
+When the work merges through a pull request, put the markdown front page
+in the pull-request description — it already meets that channel's bar
+(what changed, proof, decisions, self-contained), so third-party reviewers
+get the full handoff without access to anything else. Distill the front
+page into the merge commit message; any replay command kept in either
+place must depend only on the merged tree, never on files under
 `.handoff/`. After the merge is confirmed, ask `tasks`, if present, to close
 the task using the merge commit as the idempotency input.
 
