@@ -93,6 +93,14 @@ gaps to close, any throwaway prototype a requirements row deferred to — are
 the plan's first items, verifiable like any other, and independent
 prerequisite items run as parallel segments by default.
 
+When the finished work will warrant a handoff, the plan's final phase is a
+handoff phase: one segment dispatched like any other, whose brief names it
+the handoff owner, consuming the ledger and the captured demonstrations to
+produce the report — the review skill's production phase run as ordinary
+flight machinery. Every other segment remains a delegated chunk that
+declines review and reports its evidence upward; the ownership question a
+segment might otherwise have to infer is settled on the plan's page.
+
 Plans change only by recorded revision in a fresh planning context, never by
 silent mid-segment edits — and revisions are batch events (after probes
 land, after captures land, after a batch of operator rulings), not a

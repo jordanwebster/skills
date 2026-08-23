@@ -712,3 +712,19 @@ the reversal was explicit and knowing, not a silent re-litigation.
   — the two measured antipatterns (283M- and 288M-token long-lived
   orchestrator sessions) were both improvised outside or alongside the
   machinery, while the flight's own fresh contexts stayed bounded.
+- **(2026-08-23) Handoff is two phases, and a flight plans the second.**
+  Accumulation (outline, evidence, demonstrations, friction — by whoever
+  does the work) and production (freshness, independent review, front
+  page — by whoever presents to the operator) are now named as separable
+  phases: a scaffold flight accumulates through its ledger and plans a
+  dedicated handoff phase whose brief names it the handoff owner, a solo
+  agent does both, and inbound review of foreign code is production
+  running alone. Motivated by a2a's item-058, which encoded the handoff
+  as a ledger item no dispatched segment was allowed to own — the decline
+  rule had closed the door without the plan opening one — so it defaulted
+  to the long-lived attending session. Alongside this, a citation rule:
+  scaffold verification convinces machines, handoff demonstrations
+  convince the operator; a cited check settles a proof's automated
+  evidence but never replaces the showing of a user-visible promise, and
+  demonstrations are planned up front and captured by the segment that
+  first passes the item, in the context that already has it working.

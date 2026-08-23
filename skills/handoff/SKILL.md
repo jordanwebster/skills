@@ -11,6 +11,17 @@ decisions only they can make — and knows more than a diff would tell them.
 Every step below must buy the operator a better decision per minute of their
 attention; nothing else belongs.
 
+The work falls in two phases that need not share a context or an author.
+**Accumulation** — the outline, evidence, demonstrations, and friction
+gathered while the work happens — belongs to whoever does the work.
+**Production** — freshness, the independent review, the front page —
+belongs to whoever owns presenting the work to the operator. A scaffold
+flight accumulates through its ledger and captured demonstrations and
+plans a dedicated production segment; a single agent doing one task does
+both itself; a foreign branch arrives with no accumulation at all, and
+inbound review is production running alone, reconstructing what
+accumulation should have left behind.
+
 ## Decide whether this work needs a handoff
 
 Run a handoff when the operator asks for one by name, or when the change
