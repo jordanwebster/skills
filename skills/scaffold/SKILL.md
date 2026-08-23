@@ -66,7 +66,8 @@ default and blast radius.
 
 The plan is presented to the operator as a readable document — research
 phases and preconditions, implementation phases, interfaces, how the work
-will be verified and why that way, file layout, the operator acts it needs
+will be verified and why that way, what will be demonstrated to the
+operator at the end, file layout, the operator acts it needs
 and when each fires, and the staffing shape if roles will be dispatched to
 different models. Present it and stop; the operator's approval is given in
 conversation, explicitly — never inferred. The operator's approval buys the
@@ -112,6 +113,16 @@ artifact under test; the operator promotes it at an act agreed in the plan.
 Keep tests visible but read-only to workers; only a recorded operator
 decision may weaken a criterion. Deny rules are defense in depth, not the
 control.
+
+Verification convinces a machine; the operator is also owed a showing.
+The plan's readable sections include a demonstration list: each
+user-visible promise the operator will be shown working — a screenshot, a
+transcript, a before/after pair — scoped to promises, never internals. A
+segment captures a listed demonstration at the moment its item first
+passes — the running context that just proved the item is the cheapest
+camera it will ever have — and stores it as flight evidence tagged with
+the `verified_head` it depicts, for the end-of-work report to inherit
+rather than reconstruct.
 
 Anchor verification to real substrate behavior, three ways:
 

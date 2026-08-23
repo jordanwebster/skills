@@ -101,6 +101,12 @@ checkout, user-visible walkthroughs, and whatever the records' own gap
 notes name. A handoff that follows a scaffold flight synthesizes the
 flight's evidence; it does not re-run the flight.
 
+A citation settles a proof's automated evidence, never its
+demonstration. A check's exit status shows a machine the claim holds and
+shows the operator nothing; every user-visible promise still owes a
+demonstration a human can watch, and no citation is accepted in its
+place. Cited records excuse re-running checks — never showing the work.
+
 For every outline entry not settled by a cited record, create a
 self-contained proof under `proofs/` with all three parts:
 
