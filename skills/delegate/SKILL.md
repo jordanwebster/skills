@@ -68,6 +68,15 @@ infer its position in the run. The review skill's own rule (delegated
 chunks decline and report evidence upward) is the backstop when a brief
 forgets.
 
+A loop of dispatches — a design-review cycle, a fix loop, anything run
+"until aligned" — is bounded by a stop bar fixed before the first round:
+the dispatcher, as the operator's proxy, writes down what severity of
+finding forces another round and adjudicates every finding against it.
+The stop condition is never handed to a participant — a reviewer briefed
+to be adversarial always finds something, so "until the reviewer
+approves" does not terminate. Findings below the bar are recorded, not
+chased; a round producing only below-bar findings ends the loop.
+
 Effort resolves in the same mechanical order as the role: a phase's effort
 tag from the plan if one exists (assigned by the planner, visible in the
 staffing shape the operator approved), else the roster's default for the

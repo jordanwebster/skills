@@ -692,3 +692,23 @@ the reversal was explicit and knowing, not a silent re-litigation.
   never move it), zero Git writes. The value is no longer a real tree OID;
   freshness records stamped before this change compare unequal to the new
   computation and need one re-stamp.
+- **(2026-08-23) Four rules from the first two consumer flights measured
+  end to end** (the a2a scaffold flight and the wt improvised rebuild,
+  read against the spend store's token record). Handoff's evidence step
+  now opens with an inventory of existing verification — a scaffold
+  ledger's per-item checks are citable evidence, and new proofs cover
+  only what no record does — because the a2a handoff tail spent ~6.5
+  hours re-deriving item-level proof the ledger already carried. Inbound
+  review's ceremony now scales to the operator's request — discipline is
+  owed, mechanisms (commits, spawned reviewer, `.handoff/` writes) drop
+  when the request or session policy forbids them, with the substitution
+  stated — closing four calibration-log entries of quiet deviation.
+  Delegate bounds every dispatch loop with a pre-fixed, dispatcher-owned
+  stop bar, never "until the reviewer approves" — the wt design loop
+  diverged (blocking counts 10→8→12→19) with its stop condition held by
+  the adversarial participant. Scaffold names multi-round
+  dispatch-and-review work as flight-shaped however offhand the request,
+  and declares the attending conversation disposable at phase boundaries
+  — the two measured antipatterns (283M- and 288M-token long-lived
+  orchestrator sessions) were both improvised outside or alongside the
+  machinery, while the flight's own fresh contexts stayed bounded.

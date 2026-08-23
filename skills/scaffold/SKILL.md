@@ -9,7 +9,11 @@ Machinery for endurance. Use this skill only when the work cannot be done
 reliably in one sitting: multi-session scope, or verification infrastructure
 — captures, harnesses, fixtures — that must outlive any single context.
 Never gate the decision on predicted duration; count contexts and continuity
-risks, which are observable before work starts.
+risks, which are observable before work starts. Work that implies multiple
+dispatch-and-review rounds — "plan it, have it reviewed, then implement it"
+— is multi-context by construction however offhand the request: run it as a
+scaffolded flight rather than improvising the loop inside the conversation
+that received it.
 
 Decline this skill when a well-understood task fits one context: execute it
 directly and emit no scaffold. Less machinery is the correct result when
@@ -217,6 +221,14 @@ the operator asking how it's going, a fresh context after a loss — attaches
 by reading the workspace: the resume protocol in `autonomy-grant.md` is the
 canonical ritual. Do not re-plan and do not reconstruct from summaries; both
 carry contamination that the canonical files avoid.
+
+The attending conversation is as disposable as any segment. Because state
+lives in the workspace, the context that launched or monitors the run
+holds nothing worth preserving: it re-pays its whole history on every
+turn while knowing nothing the ledger does not. End it at a phase
+boundary and attach fresh rather than keeping one conversation alive to
+"know what's happening"; an attendant noticing its own context spanning
+phase boundaries says so and proposes a fresh attach.
 
 ## Wrap up
 

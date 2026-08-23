@@ -90,8 +90,19 @@ files.
 
 ## Assemble the handoff
 
-For every outline entry, create a self-contained proof under `proofs/` with
-all three parts:
+Before writing any proof, inventory the verification the work already
+produced — a scaffold ledger's per-item checks with their `verified_head`
+commits, CI results, committed fixtures and their replay commands. An
+existing record whose check still replays is evidence: cite it (the claim,
+the check command, the commit it passed at) instead of re-deriving it.
+Author new proofs only for claims no record covers — behavior across the
+seams between separately verified pieces, verification from a clean
+checkout, user-visible walkthroughs, and whatever the records' own gap
+notes name. A handoff that follows a scaffold flight synthesizes the
+flight's evidence; it does not re-run the flight.
+
+For every outline entry not settled by a cited record, create a
+self-contained proof under `proofs/` with all three parts:
 
 1. **Automated evidence.** Name every test or check and state what its
    setup and assertions actually observe. Never substitute “tests pass.”
@@ -266,6 +277,17 @@ with explicit operator authorization.
 - For a bare branch or pull request, declare `inbound bare branch`; the
   reviewer reconstructs and reviews the code, writes the proof outline the
   author should have written, assesses existing evidence, and lists gaps.
+
+The operator's request sets the ceremony. Inbound review owes the review
+discipline — reconstruction before narrative, evidence attacked rather than
+trusted, an independent-check line that tells the truth — never the full
+apparatus for its own sake: when the operator asks for one file, deliver
+one file; when their instructions or session policy forbid a step — no
+commits, no spawned reviewer, no `.handoff/` writes — keep the discipline,
+drop the mechanism, and state the substitution on the page (a review run
+without an isolated reviewer says so in its independent-check line) instead
+of deviating silently. Ceremony above the request is spend the operator
+declined.
 
 Probe for `tasks`; if present, use its read verbs to find related,
 duplicate, or impacted tasks and carry them onto the front page. Synthesize
