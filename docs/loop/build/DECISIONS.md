@@ -15,3 +15,4 @@ never pre-approved.
 - 2026-08-24 — Retain plan sources at digest-addressed immutable paths and derive the active prompt source from stored state because a rejected re-import may leave unused bytes but must never change an accepted graph's instructions.
 - 2026-08-24 — Give every lease a fresh opaque generation ID and require it on claims, releases, and verification because holder names can recur and must not make evidence from an earlier attempt current again.
 - 2026-08-24 — Make `init` idempotently repair an absent atomically-written config when its durable store already matches the requested goal because interruption between those writes must not require manual workspace surgery.
+- 2026-08-24 — Publish retained plan sources with a same-directory fsynced temporary file and an atomic hard-link create because digest paths are write-once and readers must never observe replacement or partial bytes.

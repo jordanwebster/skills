@@ -98,6 +98,39 @@ class PlanAndFrontierTests(unittest.TestCase):
             second_path.read_text(encoding="utf-8"),
         )
 
+    def test_reimport_same_machine_block_cannot_change_retained_prose(self) -> None:
+        first_path = write_plan(self.root / "first.html", [task("first")])
+        import_plan(self.store, first_path)
+        active_path = retained_plan_path(self.store)
+        active_source = active_path.read_bytes()
+        second_path = write_plan(self.root / "second.html", [task("first")])
+        second_path.write_text(
+            second_path.read_text(encoding="utf-8").replace(
+                "<h1>Readable plan</h1>",
+                "<h1>Changed readable plan</h1>",
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(PlanError, "different bytes"):
+            import_plan(self.store, second_path)
+
+        self.assertEqual(active_source, active_path.read_bytes())
+        self.assertNotEqual(active_source, second_path.read_bytes())
+
+    def test_reimport_identical_source_leaves_retained_file_untouched(self) -> None:
+        plan_path = write_plan(self.root / "plan.html", [task("first")])
+        import_plan(self.store, plan_path)
+        active_path = retained_plan_path(self.store)
+        active_stat = active_path.stat()
+
+        with self.assertRaisesRegex(InvalidTransition, "already"):
+            import_plan(self.store, plan_path)
+
+        unchanged_stat = active_path.stat()
+        self.assertEqual(active_stat.st_ino, unchanged_stat.st_ino)
+        self.assertEqual(active_stat.st_mtime_ns, unchanged_stat.st_mtime_ns)
+
     def test_task_id_cannot_escape_workspace_paths(self) -> None:
         plan = write_plan(self.root / "traversal.html", [task("../escape")])
 

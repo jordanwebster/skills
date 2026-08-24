@@ -96,7 +96,7 @@ def import_plan(store: Store, path: str | Path) -> ImportedPlan:
     plan_path = Path(path)
     plan = read_plan(plan_path)
     destination = retained_plan_path(store, plan.digest)
-    _atomic_write_bytes(destination, plan_path.read_bytes())
+    _atomic_write_once_bytes(destination, plan_path.read_bytes())
     store.apply(
         {
             "type": "plan-imported",
@@ -197,7 +197,7 @@ def _canonical_json(value: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+def _atomic_write_once_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
@@ -210,7 +210,12 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-    except BaseException:
+        try:
+            os.link(temporary_path, path)
+        except FileExistsError:
+            if path.read_bytes() != payload:
+                raise PlanError(
+                    f"retained plan {path.name} already exists with different bytes"
+                )
+    finally:
         temporary_path.unlink(missing_ok=True)
-        raise
