@@ -55,6 +55,56 @@ def task(
     }
 
 
+def verification_transition(
+    store: Store,
+    task_id: str,
+    holder: str,
+    lease_id: str,
+    candidate_head: str,
+) -> dict[str, object]:
+    check = f"check-{task_id}"
+    check_id = hashlib.sha256(check.encode("utf-8")).hexdigest()
+    artifact = {
+        "schema_version": 1,
+        "task_id": task_id,
+        "holder": holder,
+        "lease_id": lease_id,
+        "base_head": "base123",
+        "candidate_head": candidate_head,
+        "candidate_tree": "tree123",
+        "check_id": check_id,
+        "check_command": check,
+        "protected_changes": [],
+        "protected_hashes": {"base": {}, "candidate": {}},
+        "process": {"returncode": 0, "duration_seconds": 0.1, "timed_out": False},
+        "result": {
+            "schema_version": 1,
+            "candidate_head": candidate_head,
+            "check_id": check_id,
+            "observations": [{"id": "unit", "status": "passed"}],
+        },
+        "verdict": "green",
+        "reason": "one structured observation passed",
+        "artifacts": [],
+    }
+    relative = Path("verifications") / task_id / lease_id / "verdict.json"
+    path = store.root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = (
+        json.dumps(artifact, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("utf-8")
+    path.write_bytes(payload)
+    return {
+        "type": "task-verification-recorded",
+        "task_id": task_id,
+        "holder": holder,
+        "lease_id": lease_id,
+        "verification_path": str(relative),
+        "verification_sha256": hashlib.sha256(payload).hexdigest(),
+    }
+
+
 class PlanAndFrontierTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -361,13 +411,9 @@ else:
         self.assertEqual("pending", self.store.load()["tasks"][0]["completion"])
         self.assertEqual([], self.store.ready("implementer", now=101))
         self.store.apply(
-            {
-                "type": "task-verified",
-                "task_id": "first",
-                "holder": "worker-a",
-                "lease_id": lease.lease_id,
-                "verified_head": "abc123",
-            }
+            verification_transition(
+                self.store, "first", "worker-a", lease.lease_id, "abc123"
+            )
         )
         state = self.store.load()
         self.assertEqual("complete", state["tasks"][0]["completion"])
@@ -405,16 +451,44 @@ else:
 
         with self.assertRaisesRegex(InvalidTransition, "no filed claim"):
             self.store.apply(
-                {
-                    "type": "task-verified",
-                    "task_id": "first",
-                    "holder": "worker-a",
-                    "lease_id": lease.lease_id,
-                    "verified_head": "abc123",
-                }
+                verification_transition(
+                    self.store, "first", "worker-a", lease.lease_id, "abc123"
+                )
             )
 
         self.assertEqual("pending", self.store.load()["tasks"][0]["completion"])
+
+    def test_apply_rejects_a_tampered_verification_artifact(self) -> None:
+        self.import_tasks([task("first")])
+        lease = self.store.claim("first", "worker-a")
+        source = self.root / "claim.json"
+        source.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "task_id": "first",
+                    "holder": "worker-a",
+                    "lease_id": lease.lease_id,
+                    "claim": "passes",
+                    "candidate_head": "abc123",
+                    "artifacts": ["first.txt"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.store.file_claim("first", source)
+        transition = verification_transition(
+            self.store, "first", "worker-a", lease.lease_id, "abc123"
+        )
+        artifact = self.store.root / str(transition["verification_path"])
+        artifact.write_text("{}\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(InvalidTransition, "digest"):
+            self.store.apply(transition)
+
+        state = self.store.load()
+        self.assertEqual("pending", state["tasks"][0]["completion"])
+        self.assertEqual(lease.lease_id, state["tasks"][0]["lease"]["lease_id"])
 
     def test_claim_from_an_earlier_lease_cannot_complete_a_later_lease(self) -> None:
         self.import_tasks([task("first")])
@@ -449,13 +523,13 @@ else:
         self.assertNotEqual(first_lease.lease_id, second_lease.lease_id)
         with self.assertRaisesRegex(InvalidTransition, "filed claim"):
             self.store.apply(
-                {
-                    "type": "task-verified",
-                    "task_id": "first",
-                    "holder": "same-worker",
-                    "lease_id": second_lease.lease_id,
-                    "verified_head": "abc123",
-                }
+                verification_transition(
+                    self.store,
+                    "first",
+                    "same-worker",
+                    second_lease.lease_id,
+                    "abc123",
+                )
             )
 
     def test_m0_state_without_plan_digest_migrates_and_imports(self) -> None:

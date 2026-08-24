@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import subprocess
 from typing import Any, Protocol
@@ -11,6 +12,7 @@ from typing import Any, Protocol
 from .adapters.base import DispatchResult
 from .prompt import assemble_prompt
 from .store import InvalidTransition, Store
+from .verify import verify
 
 
 class Adapter(Protocol):
@@ -74,6 +76,12 @@ def run_loop(
 
         task = frontier[0]
         segment += 1
+        try:
+            base_head = _git(product, ["rev-parse", "HEAD"]).strip()
+            if _git(product, ["status", "--porcelain"]).strip():
+                raise ValueError("product worktree is dirty before dispatch")
+        except ValueError as error:
+            return RunResult("broken", tuple(completed), str(error))
         lease = store.claim(task["id"], holder, ttl_seconds=lease_seconds)
         prompt = assemble_prompt(task, durable_paths)
         prompt_path = store.root / "prompts" / f"{task['id']}.txt"
@@ -114,17 +122,6 @@ def run_loop(
 
         try:
             claim = store.read_claim(task["id"])
-            _verify_candidate_identity(product, claim["candidate_head"])
-            store.apply(
-                {
-                    "type": "task-verified",
-                    "task_id": task["id"],
-                    "holder": holder,
-                    "lease_id": lease.lease_id,
-                    "verified_head": claim["candidate_head"],
-                    "verification": "candidate-is-clean-head",
-                }
-            )
         except (InvalidTransition, ValueError) as error:
             store.apply(
                 {
@@ -139,28 +136,100 @@ def run_loop(
             _event(
                 store,
                 f"segment {segment}: {task['id']} -> {binding_label}; "
-                "candidate rejected; "
-                "slice ended",
+                "claim rejected; slice ended",
             )
             return RunResult("failed", tuple(completed), str(error))
+
+        try:
+            verdict = verify(
+                task,
+                product,
+                store.root,
+                holder=holder,
+                lease_id=lease.lease_id,
+                base_head=base_head,
+                candidate_head=claim["candidate_head"],
+                test_paths=state["test_paths"],
+                timeout=_verification_timeout(state, task, dispatch_timeout),
+                minimum_observations=_observation_floor(state, task),
+                require_clean_worktree=True,
+            )
+        except Exception as error:
+            _event(
+                store,
+                f"segment {segment}: {task['id']} -> {binding_label}; "
+                "verification machinery malformed; line stopped",
+            )
+            return RunResult(
+                "broken",
+                tuple(completed),
+                f"verification machinery malformed: {error}",
+            )
+
+        if verdict.kind in {"infra", "killed"}:
+            store.apply(
+                {
+                    "type": "task-released",
+                    "task_id": task["id"],
+                    "holder": holder,
+                    "lease_id": lease.lease_id,
+                    "attempt_type": "infra",
+                    "reason": verdict.reason,
+                }
+            )
+            _event(
+                store,
+                f"segment {segment}: {task['id']} -> {binding_label}; "
+                f"verify {verdict.kind}; slice ended",
+            )
+            return RunResult("failed", tuple(completed), verdict.reason)
+        if verdict.kind == "malformed":
+            _event(
+                store,
+                f"segment {segment}: {task['id']} -> {binding_label}; "
+                "verification machinery malformed; line stopped",
+            )
+            return RunResult("broken", tuple(completed), verdict.reason)
+
+        try:
+            store.apply(
+                {
+                    "type": "task-verification-recorded",
+                    "task_id": task["id"],
+                    "holder": holder,
+                    "lease_id": lease.lease_id,
+                    "verification_path": str(
+                        verdict.artifact_path.relative_to(store.root.resolve())
+                    ),
+                    "verification_sha256": verdict.artifact_sha256,
+                }
+            )
+        except (InvalidTransition, ValueError) as error:
+            _event(
+                store,
+                f"segment {segment}: {task['id']} -> {binding_label}; "
+                "verification artifact rejected; line stopped",
+            )
+            return RunResult(
+                "broken",
+                tuple(completed),
+                f"verification machinery malformed: {error}",
+            )
+
+        if verdict.kind == "red":
+            _event(
+                store,
+                f"segment {segment}: {task['id']} -> {binding_label}; "
+                "verify red; slice ended",
+            )
+            return RunResult("failed", tuple(completed), verdict.reason)
 
         completed.append(task["id"])
         _event(
             store,
             f"segment {segment}: {task['id']} -> {binding_label}; flipped; "
-            "verify candidate-is-clean-head",
+            "verify green",
         )
-
-
-def _verify_candidate_identity(product_root: Path, candidate_head: str) -> None:
-    """M1 boundary: establish immutable candidate identity; M2 judges artifacts."""
-
-    head = _git(product_root, ["rev-parse", "HEAD"]).strip()
-    if head != candidate_head:
-        raise ValueError("filed candidate is not the product repository HEAD")
-    _git(product_root, ["cat-file", "-e", f"{candidate_head}^{{commit}}"])
-    if _git(product_root, ["status", "--porcelain"]).strip():
-        raise ValueError("product worktree contains uncommitted worker changes")
 
 
 def _git(root: Path, arguments: list[str]) -> str:
@@ -179,6 +248,38 @@ def _git(root: Path, arguments: list[str]) -> str:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise ValueError(f"cannot inspect candidate commit: {detail}")
     return completed.stdout
+
+
+def _observation_floor(
+    state: Mapping[str, Any], task: Mapping[str, Any]
+) -> int:
+    check_id = hashlib.sha256(task["check"].encode("utf-8")).hexdigest()
+    counts = [
+        evidence.get("observation_count", 0)
+        for item in state["tasks"]
+        for evidence in item["evidence"]
+        if evidence.get("check_id") == check_id
+        and isinstance(evidence.get("observation_count"), int)
+    ]
+    return max(counts, default=0)
+
+
+def _verification_timeout(
+    state: Mapping[str, Any], task: Mapping[str, Any], bootstrap: float
+) -> float:
+    check_id = hashlib.sha256(task["check"].encode("utf-8")).hexdigest()
+    durations = [
+        evidence.get("duration_seconds")
+        for item in state["tasks"]
+        for evidence in item["evidence"]
+        if evidence.get("check_id") == check_id
+        and isinstance(evidence.get("duration_seconds"), (int, float))
+        and not isinstance(evidence.get("duration_seconds"), bool)
+        and evidence["duration_seconds"] > 0
+    ]
+    if not durations:
+        return bootstrap
+    return max(durations) * 4
 
 
 def _event(store: Store, message: str) -> None:

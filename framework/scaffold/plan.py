@@ -175,6 +175,9 @@ def _plan_task(value: Any) -> dict[str, Any]:
         not isinstance(item, str) or not item for item in decisions
     ):
         raise PlanError("task decisions must be a list of non-empty strings")
+    test_changes = value.get("test_changes", False)
+    if not isinstance(test_changes, bool):
+        raise PlanError("task test_changes must be a boolean")
     task = {
         "schema_version": SCHEMA_VERSION,
         "id": value["id"],
@@ -184,6 +187,7 @@ def _plan_task(value: Any) -> dict[str, Any]:
         "check": value["check"],
         "depends_on": list(depends_on),
         "decisions": list(decisions),
+        "test_changes": test_changes,
         "attempts": {"work": 0, "infra": 0, "diagnostic": 0},
         "completion": "pending",
         "verdict": None,

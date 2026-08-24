@@ -1,4 +1,4 @@
-"""M1 goal function: a fresh fake-worker flight runs unattended to green."""
+"""M2 goal function: a fresh fake-worker flight verifies unattended to green."""
 
 from __future__ import annotations
 
@@ -19,21 +19,55 @@ def main() -> int:
         _git(product, "config", "user.name", "Toy Worker")
         _git(product, "config", "user.email", "toy@example.invalid")
         (product / "README.md").write_text("# Toy flight\n", encoding="utf-8")
-        _git(product, "add", "README.md")
+        checks = product / "checks"
+        checks.mkdir()
+        (checks / "check_file.py").write_text(
+            """from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import sys
+
+target = Path(sys.argv[1])
+exists = target.is_file()
+Path(os.environ["SCAFFOLD_RESULT_PATH"]).write_text(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "candidate_head": os.environ["SCAFFOLD_CANDIDATE_HEAD"],
+            "check_id": os.environ["SCAFFOLD_CHECK_ID"],
+            "observations": [
+                {
+                    "id": f"{target}-exists",
+                    "status": "passed" if exists else "failed",
+                }
+            ],
+        },
+        sort_keys=True,
+    )
+    + "\\n",
+    encoding="utf-8",
+)
+raise SystemExit(0 if exists else 1)
+""",
+            encoding="utf-8",
+        )
+        _git(product, "add", "README.md", "checks/check_file.py")
         _git(product, "commit", "--quiet", "-m", "Initialize toy product")
 
         plan = root / "plan.html"
         machine = {
             "schema_version": 1,
             "goal": "Build and wrap a toy product",
-            "test_paths": ["tests/**"],
+            "test_paths": ["checks/**", "tests/**"],
             "tasks": [
                 {
                     "id": "build",
                     "title": "Build the toy artifact",
                     "role": "implementer",
                     "effort": "small",
-                    "check": "test -f artifact.txt",
+                    "check": "python3 checks/check_file.py artifact.txt",
                     "depends_on": [],
                     "decisions": ["Write the artifact at artifact.txt"],
                 },
@@ -42,7 +76,7 @@ def main() -> int:
                     "title": "Wrap the toy flight",
                     "role": "implementer",
                     "effort": "small",
-                    "check": "test -f wrapped.txt",
+                    "check": "python3 checks/check_file.py wrapped.txt",
                     "depends_on": ["build"],
                     "decisions": ["Write the wrap marker at wrapped.txt"],
                 },
@@ -106,7 +140,7 @@ def main() -> int:
         ).is_file():
             raise AssertionError("toy flight omitted a demonstrated artifact")
 
-    print("toy flight M1 green")
+    print("toy flight M2 green")
     return 0
 
 

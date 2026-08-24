@@ -15,18 +15,18 @@ fi
 
 output=$(cat "$output_file")
 assert_eq \
-    "build incomplete: M2 seeded-failure suite is not implemented" \
+    "build incomplete: M3 supervision is not implemented" \
     "$output" \
-    "the whole-build check should name the first unfinished M2 gap"
+    "the whole-build check should name the first unfinished M3 gap"
 
 goal_output=$(timeout 120 env PYTHONPATH="$repo_root/framework" \
     python3 "$repo_root/framework/tests/toy_flight_goal.py")
 assert_eq \
-    "toy flight M1 green" \
+    "toy flight M2 green" \
     "$goal_output" \
-    "the M1 toy flight should run green unattended"
+    "the M2 toy flight should run green unattended"
 
 timeout 120 env PYTHONPATH="$repo_root/framework" \
     python3 -m unittest discover -s "$repo_root/framework/tests" -p 'test_*.py'
 
-echo "loop M0-M1 tests passed"
+echo "loop M0-M2 tests passed"

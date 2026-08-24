@@ -285,10 +285,10 @@ class Store:
             transition_type = normalized["type"]
             if transition_type == "plan-imported":
                 _apply_plan_imported(state, normalized)
-            elif transition_type == "task-verified":
+            elif transition_type == "task-verification-recorded":
                 if "observed_at" not in normalized:
                     normalized["observed_at"] = time.time()
-                self._apply_task_verified(state, normalized)
+                self._apply_task_verification(state, normalized)
             elif transition_type == "task-released":
                 _apply_task_released(state, normalized)
             else:
@@ -298,7 +298,7 @@ class Store:
             normalized_state = _normalize_state(state)
             return self._replace_unlocked(normalized_state, normalized)
 
-    def _apply_task_verified(
+    def _apply_task_verification(
         self,
         state: dict[str, Any],
         transition: Mapping[str, Any],
@@ -306,7 +306,10 @@ class Store:
         task_id = _required_text(transition, "task_id")
         holder = _required_text(transition, "holder")
         lease_id = _required_text(transition, "lease_id")
-        verified_head = _required_text(transition, "verified_head")
+        verification_path = _required_text(transition, "verification_path")
+        verification_sha256 = _required_text(
+            transition, "verification_sha256"
+        )
         observed_at = transition.get("observed_at")
         if isinstance(observed_at, bool) or not isinstance(
             observed_at, (int, float)
@@ -324,25 +327,97 @@ class Store:
             raise InvalidTransition("verified task is not leased by the holder")
         if lease["expires_at"] <= observed_at:
             raise InvalidTransition("task lease expired before verification")
+        verification = self._read_verification(
+            verification_path, verification_sha256
+        )
+        if (
+            verification["task_id"] != task_id
+            or verification["holder"] != holder
+            or verification["lease_id"] != lease_id
+        ):
+            raise InvalidTransition(
+                "verification artifact does not belong to the active task lease"
+            )
+        if verification["check_command"] != task["check"]:
+            raise InvalidTransition("verification artifact names a different check")
+        expected_check_id = hashlib.sha256(task["check"].encode("utf-8")).hexdigest()
+        if verification["check_id"] != expected_check_id:
+            raise InvalidTransition("verification artifact check digest is invalid")
+        if (
+            verification["verdict"] == "green"
+            and verification["protected_changes"]
+            and not task["test_changes"]
+        ):
+            raise InvalidTransition(
+                "green verification cannot contain out-of-scope test changes"
+            )
         claim = self.read_claim(task_id)
         if (
             claim["holder"] != holder
             or claim["lease_id"] != lease["lease_id"]
-            or claim["candidate_head"] != verified_head
+            or claim["candidate_head"] != verification["candidate_head"]
         ):
             raise InvalidTransition("verified result does not match the filed claim")
         task["completion"] = "complete"
-        task["verdict"] = "green"
-        task["verified_head"] = verified_head
+        task["verdict"] = verification["verdict"]
+        if verification["verdict"] == "green":
+            task["verified_head"] = verification["candidate_head"]
+        else:
+            task["attempts"]["work"] += 1
         task["evidence"].append(
             {
                 "claim_path": str(self.claims_path / f"{task_id}.json"),
                 "artifacts": claim["artifacts"],
                 "lease_id": lease_id,
-                "verified_head": verified_head,
+                "candidate_head": verification["candidate_head"],
+                "verification_path": verification_path,
+                "verification_sha256": verification_sha256,
+                "verdict": verification["verdict"],
+                "reason": verification["reason"],
+                "protected_changes": verification["protected_changes"],
+                "check_id": verification["check_id"],
+                "observation_count": (
+                    len(verification["result"]["observations"])
+                    if isinstance(verification.get("result"), Mapping)
+                    and isinstance(
+                        verification["result"].get("observations"), list
+                    )
+                    else 0
+                ),
+                "duration_seconds": (
+                    verification["process"].get("duration_seconds")
+                    if isinstance(verification.get("process"), Mapping)
+                    else None
+                ),
             }
         )
         task["lease"] = None
+
+    def _read_verification(
+        self, relative_name: str, expected_sha256: str
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+            raise InvalidTransition("verification_sha256 must be a SHA-256 digest")
+        relative = Path(relative_name)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise InvalidTransition("verification artifact path escapes the store")
+        path = (self.root / relative).resolve()
+        root = self.root.resolve()
+        if os.path.commonpath([root, path]) != str(root):
+            raise InvalidTransition("verification artifact path escapes the store")
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise InvalidTransition(
+                f"cannot read verification artifact: {error}"
+            ) from error
+        if hashlib.sha256(payload).hexdigest() != expected_sha256:
+            raise InvalidTransition("verification artifact digest does not match")
+        try:
+            value = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise InvalidTransition("verification artifact is not valid JSON") from error
+        return _normalize_verification(value)
 
     @contextmanager
     def _locked(self):
@@ -427,6 +502,7 @@ def _normalize_task(task: Any) -> dict[str, Any]:
     if not isinstance(task, Mapping):
         raise ValueError("each task must be an object")
     normalized = deepcopy(dict(task))
+    normalized.setdefault("test_changes", False)
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"task schema_version must be {SCHEMA_VERSION}")
     for field in ("id", "title", "role", "effort", "check"):
@@ -442,6 +518,8 @@ def _normalize_task(task: Any) -> dict[str, Any]:
         not isinstance(item, str) or not item for item in normalized["decisions"]
     ):
         raise ValueError("task decisions must be a list of non-empty strings")
+    if not isinstance(normalized.get("test_changes"), bool):
+        raise ValueError("task test_changes must be a boolean")
     attempts = normalized.get("attempts")
     if not isinstance(attempts, Mapping) or set(attempts) != {
         "work",
@@ -565,6 +643,83 @@ def _normalize_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
         not isinstance(item, str) or not item for item in normalized["artifacts"]
     ):
         raise ValueError("claim artifacts must be a list of non-empty strings")
+    _canonical_json(normalized)
+    return normalized
+
+
+def _normalize_verification(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise InvalidTransition("verification artifact must be an object")
+    normalized = deepcopy(dict(value))
+    if normalized.get("schema_version") != SCHEMA_VERSION:
+        raise InvalidTransition(
+            f"verification schema_version must be {SCHEMA_VERSION}"
+        )
+    for field in (
+        "task_id",
+        "holder",
+        "lease_id",
+        "base_head",
+        "candidate_head",
+        "check_id",
+        "check_command",
+        "reason",
+    ):
+        try:
+            _required_text(normalized, field)
+        except ValueError as error:
+            raise InvalidTransition(str(error)) from error
+    validate_task_id(normalized["task_id"])
+    if normalized.get("verdict") not in {"green", "red"}:
+        raise InvalidTransition(
+            "only green or red task verification can be recorded"
+        )
+    protected_changes = normalized.get("protected_changes", [])
+    if not isinstance(protected_changes, list) or any(
+        not isinstance(path, str) or not path for path in protected_changes
+    ):
+        raise InvalidTransition(
+            "verification protected_changes must be a list of paths"
+        )
+    if len(set(protected_changes)) != len(protected_changes):
+        raise InvalidTransition("verification protected_changes must be unique")
+    normalized["protected_changes"] = list(protected_changes)
+    artifacts = normalized.get("artifacts")
+    if not isinstance(artifacts, list) or any(
+        not isinstance(path, str) or not path for path in artifacts
+    ):
+        raise InvalidTransition("verification artifacts must be a list of paths")
+    if normalized["verdict"] == "green":
+        try:
+            _required_text(normalized, "candidate_tree")
+        except ValueError as error:
+            raise InvalidTransition(str(error)) from error
+        result = normalized.get("result")
+        if not isinstance(result, Mapping):
+            raise InvalidTransition("green verification requires a result object")
+        if result.get("schema_version") != SCHEMA_VERSION:
+            raise InvalidTransition("verification result schema version is invalid")
+        if result.get("candidate_head") != normalized["candidate_head"]:
+            raise InvalidTransition("verification result candidate does not match")
+        if result.get("check_id") != normalized["check_id"]:
+            raise InvalidTransition("verification result check does not match")
+        observations = result.get("observations")
+        if not isinstance(observations, list) or not observations:
+            raise InvalidTransition("green verification requires observations")
+        for observation in observations:
+            if (
+                not isinstance(observation, Mapping)
+                or set(observation) != {"id", "status"}
+                or not isinstance(observation["id"], str)
+                or not observation["id"]
+                or observation["status"] != "passed"
+            ):
+                raise InvalidTransition(
+                    "green verification observations must all be passed"
+                )
+        process = normalized.get("process")
+        if not isinstance(process, Mapping) or process.get("returncode") != 0:
+            raise InvalidTransition("green verification process must exit zero")
     _canonical_json(normalized)
     return normalized
 
