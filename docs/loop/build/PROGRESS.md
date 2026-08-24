@@ -159,20 +159,39 @@ next iteration trusts this file over anything else.
   bounded re-check used fresh read-only `gpt-5.6-sol` xhigh contexts in a disposable
   checkout and lack cross-family diversity. The whole-build check honestly exits 1
   with `build incomplete: M4 real adapters are not implemented`.
+- 2026-08-24 — M4 advanced in `5acb573` (`Implement isolated real CLI adapters`),
+  with the bounded review fix in `0cf4076` (`Close real adapter trust boundaries`).
+  The public run and start commands now resolve Codex and Claude mechanically from
+  the delegate roster; each adapter owns its vendor flags and runs in a disposable
+  local clone, accepts only a schema-bound descendant commit claim, and imports it
+  by fast-forward through the existing verifier. Retained output is redacted, the
+  worker environment excludes unrelated secret-named variables, final-tree and
+  commit metadata receive a secret scan, worker process groups are cleaned up, and
+  recognizable transport and setup failures count as infrastructure. Executable
+  local fixtures cover both CLI contracts. The initial independent review found
+  five process, compatibility, isolation, and accounting defects; the bounded fix
+  addressed them, and sixty-five framework tests plus the full repository suite
+  pass. The one bounded fresh re-check confirmed those fixes but found two remaining
+  adapter-isolation defects: inherited `PWD` still discloses the active checkout,
+  and a secret-bearing intermediate candidate commit is not scanned when its blob
+  is deleted before the final tree. Per Handoff's stop bar, no second automatic fix
+  loop was taken, so M4 remains in progress. Authenticated dispatch was not run
+  because this build forbids network access; the reversible fixture default and
+  resulting proof gap are recorded in `QUESTIONS.md`. The whole-build check honestly
+  exits 1 with `build incomplete: M4 adapter isolation is incomplete`.
 
 ## Next
 
-- Start M4 only: implement the Claude and Codex adapters behind the existing
-  vendor-neutral dispatch contract, including sandbox flags, structured output,
-  transcripts, and retained-log secret filtering.
-- Resolve bindings mechanically from the delegate roster without allowing vendor
-  knowledge to escape `framework/scaffold/adapters/`.
-- Close the recorded case-variant symlink path into `.scaffolding` while establishing
-  the M4 worker sandbox boundary; add the exact `.SCAFFOLDING` symlink regression.
-- Run the toy flight through each real CLI. If local authentication is unavailable,
-  implement and fixture-test the complete command/result boundary and record the
-  live-auth gap in `QUESTIONS.md` as the brief directs.
-- Keep `check.sh` non-zero until all M4 checks pass; its current reason is the first
-  genuine M4 gap.
+- Continue M4 only: replace inherited `PWD` and `OLDPWD` with the disposable checkout
+  and add an exact source-path disclosure seed.
+- Scan every blob and commit object introduced by `base..candidate`, including
+  intermediate history; seed a worker that commits a secret, deletes it, and claims
+  the clean final commit.
+- Re-run both real-CLI fixtures, the full regression suite, and one bounded
+  independent check after those isolation repairs.
+- Keep `check.sh` non-zero with `build incomplete: M4 adapter isolation is
+  incomplete` until the complete M4 boundary passes.
+- Preserve the authenticated real-flight proof gap unless a later iteration has
+  explicit network authority; do not weaken the fixture coverage around it.
 - Imports currently use `PYTHONPATH=framework`; installation and the stable executable
   surface remain future milestone work.

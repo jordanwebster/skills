@@ -15,7 +15,7 @@ fi
 
 output=$(cat "$output_file")
 assert_eq \
-    "build incomplete: M4 real adapters are not implemented" \
+    "build incomplete: M4 adapter isolation is incomplete" \
     "$output" \
     "the whole-build check should name the first remaining milestone"
 
