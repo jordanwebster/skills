@@ -14,6 +14,7 @@ import uuid
 
 from . import __version__
 from .adapters.fake import FakeAdapter
+from .adapters.roster import RosterAdapter, RosterError
 from .loop import run_loop
 from .plan import import_plan, retained_plan_path
 from .store import Store, initial_state
@@ -116,8 +117,9 @@ def main(arguments: list[str] | None = None) -> int:
 
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("workspace", type=Path)
-    parser.add_argument("--adapter", choices=("fake",), required=True)
-    parser.add_argument("--script", type=Path, required=True)
+    parser.add_argument("--adapter", choices=("fake", "roster"), required=True)
+    parser.add_argument("--script", type=Path)
+    parser.add_argument("--roster", type=Path)
     parser.add_argument("--product", type=Path)
     parser.add_argument("--holder", default="fake-worker")
     parser.add_argument("--profile")
@@ -159,7 +161,18 @@ def _run(parsed: argparse.Namespace) -> int:
         product = Path(config["product_root"]).resolve()
     else:
         product = parsed.product.resolve()
-    adapter = FakeAdapter(parsed.script, store)
+    try:
+        if parsed.adapter == "fake":
+            if parsed.script is None:
+                raise ValueError("the fake adapter requires --script")
+            adapter = FakeAdapter(parsed.script, store)
+        else:
+            if parsed.script is not None:
+                raise ValueError("the roster adapter does not accept --script")
+            adapter = RosterAdapter(store, parsed.roster)
+    except (RosterError, ValueError) as error:
+        print(f"cannot run: {error}")
+        return 1
     plan_path = retained_plan_path(store)
     runtime = Supervisor(
         workspace,
@@ -213,14 +226,16 @@ def _start(parsed: argparse.Namespace) -> int:
         str(workspace),
         "--adapter",
         parsed.adapter,
-        "--script",
-        str(parsed.script.resolve()),
         "--holder",
         parsed.holder,
         "--run-id",
         run_id,
         "--supervised-child",
     ]
+    if parsed.script is not None:
+        command.extend(("--script", str(parsed.script.resolve())))
+    if parsed.roster is not None:
+        command.extend(("--roster", str(parsed.roster.resolve())))
     if parsed.product is not None:
         command.extend(("--product", str(parsed.product.resolve())))
     if parsed.profile is not None:

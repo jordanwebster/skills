@@ -5,4 +5,8 @@ decisions already made, and check command. Land one candidate product commit, th
 file a typed completion claim. A claim is not a state transition: only the framework
 may verify the candidate and mark the task complete.
 
+Your final response must be the structured claim requested by the dispatcher. Name
+the exact commit at your checkout's HEAD and list the repository-relative artifacts
+that support the claim. Do not include commentary outside that structured response.
+
 Do not select other work or edit the flight's task state.

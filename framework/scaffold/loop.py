@@ -141,9 +141,12 @@ def run_loop(
             prompt,
             {
                 "task_id": task["id"],
+                "role": task["role"],
+                "effort": task["effort"],
                 "holder": holder,
                 "lease_id": lease.lease_id,
                 "product_root": str(product),
+                "base_head": base_head,
                 "claim_reservation_seconds": (
                     lease_seconds + (2 * verification_timeout)
                 ),
@@ -151,6 +154,7 @@ def run_loop(
             "workspace-write",
             dispatch_timeout,
         )
+        active_binding = result.binding_label or binding_label
         if result.exit_class != "success":
             try:
                 _restore_product(product, base_head)
@@ -162,7 +166,11 @@ def run_loop(
                     "task_id": task["id"],
                     "holder": holder,
                     "lease_id": lease.lease_id,
-                    "attempt_type": "work",
+                    "attempt_type": (
+                        "infra"
+                        if result.exit_class in {"infra", "killed"}
+                        else "work"
+                    ),
                     "reason": result.exit_class,
                 }
             )
@@ -170,7 +178,7 @@ def run_loop(
                 lifecycle.task_finished()
             _event(
                 store,
-                f"segment {segment}: {task['id']} -> {binding_label}; worker "
+                f"segment {segment}: {task['id']} -> {active_binding}; worker "
                 f"{result.exit_class}; slice ended",
             )
             return RunResult(
@@ -200,7 +208,7 @@ def run_loop(
                 lifecycle.task_finished()
             _event(
                 store,
-                f"segment {segment}: {task['id']} -> {binding_label}; "
+                f"segment {segment}: {task['id']} -> {active_binding}; "
                 "claim rejected; slice ended",
             )
             return RunResult("failed", tuple(completed), str(error))
@@ -226,7 +234,7 @@ def run_loop(
                 return RunResult("broken", tuple(completed), str(restore_error))
             _event(
                 store,
-                f"segment {segment}: {task['id']} -> {binding_label}; "
+                f"segment {segment}: {task['id']} -> {active_binding}; "
                 "verification machinery malformed; line stopped",
             )
             return RunResult(
@@ -254,7 +262,7 @@ def run_loop(
                 lifecycle.task_finished()
             _event(
                 store,
-                f"segment {segment}: {task['id']} -> {binding_label}; "
+                f"segment {segment}: {task['id']} -> {active_binding}; "
                 f"verify {verdict.kind}; slice ended",
             )
             return RunResult("failed", tuple(completed), verdict.reason)
@@ -265,7 +273,7 @@ def run_loop(
                 return RunResult("broken", tuple(completed), str(error))
             _event(
                 store,
-                f"segment {segment}: {task['id']} -> {binding_label}; "
+                f"segment {segment}: {task['id']} -> {active_binding}; "
                 "verification machinery malformed; line stopped",
             )
             return RunResult("broken", tuple(completed), verdict.reason)
@@ -292,7 +300,7 @@ def run_loop(
         except (InvalidTransition, ValueError) as error:
             _event(
                 store,
-                f"segment {segment}: {task['id']} -> {binding_label}; "
+                f"segment {segment}: {task['id']} -> {active_binding}; "
                 "verification artifact rejected; line stopped",
             )
             return RunResult(
@@ -307,7 +315,7 @@ def run_loop(
         if verdict.kind == "red":
             _event(
                 store,
-                f"segment {segment}: {task['id']} -> {binding_label}; "
+                f"segment {segment}: {task['id']} -> {active_binding}; "
                 "verify red; slice ended",
             )
             return RunResult("failed", tuple(completed), verdict.reason)
@@ -315,7 +323,7 @@ def run_loop(
         completed.append(task["id"])
         _event(
             store,
-            f"segment {segment}: {task['id']} -> {binding_label}; flipped; "
+            f"segment {segment}: {task['id']} -> {active_binding}; flipped; "
             "verify green",
         )
 
