@@ -82,7 +82,14 @@ def run_loop(
                 raise ValueError("product worktree is dirty before dispatch")
         except ValueError as error:
             return RunResult("broken", tuple(completed), str(error))
-        lease = store.claim(task["id"], holder, ttl_seconds=lease_seconds)
+        verification_timeout = _verification_timeout(
+            state, task, dispatch_timeout
+        )
+        lease = store.claim(
+            task["id"],
+            holder,
+            ttl_seconds=lease_seconds + dispatch_timeout,
+        )
         prompt = assemble_prompt(task, durable_paths)
         prompt_path = store.root / "prompts" / f"{task['id']}.txt"
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,6 +101,9 @@ def run_loop(
                 "holder": holder,
                 "lease_id": lease.lease_id,
                 "product_root": str(product),
+                "claim_reservation_seconds": (
+                    lease_seconds + (2 * verification_timeout)
+                ),
             },
             "workspace-write",
             dispatch_timeout,
@@ -147,23 +157,6 @@ def run_loop(
                 "claim rejected; slice ended",
             )
             return RunResult("failed", tuple(completed), str(error))
-
-        verification_timeout = _verification_timeout(
-            state, task, dispatch_timeout
-        )
-        try:
-            store.renew(
-                task["id"],
-                holder,
-                lease.lease_id,
-                ttl_seconds=lease_seconds + (2 * verification_timeout),
-            )
-        except (InvalidTransition, ValueError) as error:
-            return RunResult(
-                "broken",
-                tuple(completed),
-                f"cannot reserve the task through verification: {error}",
-            )
 
         try:
             verdict = verify(

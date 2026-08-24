@@ -28,3 +28,4 @@ never pre-approved.
 - 2026-08-24 — Renew a claimed task's lease before verification for the original lease allowance plus twice the derived check timeout because valid long checks must remain single-owner through artifact application.
 - 2026-08-24 — Restore the product branch to its clean pre-dispatch commit before recording or releasing any non-green outcome because later independent work must never inherit an unverified candidate.
 - 2026-08-24 — Create and fsync every verification-artifact directory boundary before writing a verdict because the journal must never make a terminal transition durable before its cited evidence path is durable.
+- 2026-08-24 — Cover dispatch with its configured timeout plus lease grace, then persist the typed claim and its check-bound lease reservation in one locked journal transition because no reclaimer may enter between candidate filing and framework verification.

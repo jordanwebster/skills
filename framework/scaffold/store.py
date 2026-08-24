@@ -232,11 +232,18 @@ class Store:
         task_id: str,
         evidence_path: str | Path,
         *,
+        reservation_seconds: float | None = None,
         now: float | None = None,
     ) -> Path:
-        """Validate and durably retain a worker's typed completion claim."""
+        """Retain a typed claim and reserve its lease in one transition."""
 
         task_id = validate_task_id(task_id)
+        if reservation_seconds is not None and (
+            isinstance(reservation_seconds, bool)
+            or not isinstance(reservation_seconds, (int, float))
+            or reservation_seconds <= 0
+        ):
+            raise ValueError("reservation_seconds must be positive or None")
         if now is not None and (
             isinstance(now, bool) or not isinstance(now, (int, float))
         ):
@@ -261,8 +268,28 @@ class Store:
                 raise InvalidTransition("claim does not belong to the current lease")
             if lease["expires_at"] <= observed_at:
                 raise InvalidTransition("task lease expired before the claim was filed")
+            lease_duration = lease["expires_at"] - lease["acquired_at"]
+            reserved_for = (
+                lease_duration
+                if reservation_seconds is None
+                else float(reservation_seconds)
+            )
+            expires_at = observed_at + reserved_for
             destination = self.claims_path / f"{task_id}.json"
             _atomic_write_json(destination, normalized)
+            lease["expires_at"] = expires_at
+            self._replace_unlocked(
+                state,
+                {
+                    "type": "task-lease-renewed",
+                    "task_id": task_id,
+                    "holder": normalized["holder"],
+                    "lease_id": normalized["lease_id"],
+                    "observed_at": observed_at,
+                    "expires_at": expires_at,
+                    "reason": "claim-filed",
+                },
+            )
         return destination
 
     def renew(

@@ -9,7 +9,7 @@ import unittest
 from scaffold.adapters.fake import FakeAdapter
 from scaffold.loop import run_loop
 from scaffold.plan import import_plan, retained_plan_path
-from scaffold.store import Store, initial_state
+from scaffold.store import Store, TaskUnavailable, initial_state
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -324,6 +324,65 @@ raise SystemExit(0 if exists else 1)
             entry["transition"]["type"] for entry in plan.read_journal()
         ]
         self.assertIn("task-lease-renewed", transitions)
+
+    def test_claim_filing_reserves_lease_before_reclaim_can_run(self) -> None:
+        plan = Store(self.root / "claim-reservation-flight")
+        plan.create(initial_state("Build the toy"))
+        import_plan(
+            plan,
+            write_plan(
+                self.root / "claim-reservation-plan.html",
+                [task("reserved")],
+            ),
+        )
+        script = self.write_script(
+            [
+                {
+                    "task_id": "reserved",
+                    "commit_message": "Build reserved artifact",
+                    "writes": {"reserved.txt": "reserved\n"},
+                }
+            ]
+        )
+        inner = FakeAdapter(script, plan)
+
+        class ReclaimAfterClaimAdapter:
+            reclaim_status = "not-run"
+
+            def dispatch(self, prompt, binding, sandbox, timeout):
+                task_state = plan.load()["tasks"][0]
+                original_expiry = task_state["lease"]["expires_at"]
+                result = inner.dispatch(prompt, binding, sandbox, timeout)
+                try:
+                    plan.claim(
+                        "reserved",
+                        "reclaiming-worker",
+                        now=original_expiry + 0.001,
+                    )
+                except TaskUnavailable:
+                    self.reclaim_status = "blocked"
+                else:
+                    self.reclaim_status = "reclaimed"
+                return result
+
+        adapter = ReclaimAfterClaimAdapter()
+        result = run_loop(
+            plan,
+            self.product,
+            adapter,
+            holder="original-worker",
+            lease_seconds=5,
+            dispatch_timeout=2,
+        )
+
+        self.assertEqual("complete", result.status, result.reason)
+        self.assertEqual("blocked", adapter.reclaim_status)
+        reserved = plan.load()["tasks"][0]
+        self.assertEqual("green", reserved["verdict"])
+        self.assertEqual(
+            reserved["verified_head"],
+            git(self.product, "rev-parse", "HEAD").strip(),
+        )
 
     def test_out_of_scope_check_edit_withholds_green_flip(self) -> None:
         plan = Store(self.root / "test-edit-flight")

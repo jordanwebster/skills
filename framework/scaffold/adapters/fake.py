@@ -34,6 +34,9 @@ class FakeAdapter:
         task_id = validate_task_id(_required_text(binding, "task_id"))
         holder = _required_text(binding, "holder")
         lease_id = _required_text(binding, "lease_id")
+        claim_reservation_seconds = _required_positive_number(
+            binding, "claim_reservation_seconds"
+        )
         product_root = Path(_required_text(binding, "product_root")).resolve()
         result_root = self.store.root / "adapter-results" / task_id
         transcript_path = result_root / "transcript.json"
@@ -92,7 +95,11 @@ class FakeAdapter:
                 + "\n",
                 encoding="utf-8",
             )
-            self.store.file_claim(task_id, evidence_source)
+            self.store.file_claim(
+                task_id,
+                evidence_source,
+                reservation_seconds=claim_reservation_seconds,
+            )
             transcript.update(
                 {
                     "exit_class": "success",
@@ -183,3 +190,14 @@ def _required_text(value: Mapping[str, Any], field: str) -> str:
     if not isinstance(candidate, str) or not candidate:
         raise ValueError(f"{field} must be a non-empty string")
     return candidate
+
+
+def _required_positive_number(value: Mapping[str, Any], field: str) -> float:
+    candidate = value.get(field)
+    if (
+        isinstance(candidate, bool)
+        or not isinstance(candidate, (int, float))
+        or candidate <= 0
+    ):
+        raise ValueError(f"{field} must be positive")
+    return float(candidate)
