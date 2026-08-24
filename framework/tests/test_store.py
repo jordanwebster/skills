@@ -38,23 +38,23 @@ class StoreTests(unittest.TestCase):
 
     def test_replace_appends_transition_and_materializes_state(self) -> None:
         state = self.store.create(initial_state("Build it"))
-        state["tasks"].append({"id": "task-1", "completion": "pending"})
+        state["test_paths"].append("tests/**")
 
         replaced = self.store.replace(
             state,
-            {"type": "task-imported", "task_id": "task-1"},
+            {"type": "configuration-updated"},
         )
 
         self.assertEqual(state, replaced)
         self.assertEqual(state, self.store.load())
         entries = self.store.read_journal()
         self.assertEqual([1, 2], [entry["sequence"] for entry in entries])
-        self.assertEqual("task-imported", entries[-1]["transition"]["type"])
+        self.assertEqual("configuration-updated", entries[-1]["transition"]["type"])
 
     def test_load_recovers_missing_or_stale_materialized_state(self) -> None:
         state = self.store.create(initial_state("Recover it"))
-        state["tasks"].append({"id": "task-1"})
-        self.store.replace(state, {"type": "task-imported"})
+        state["test_paths"].append("tests/**")
+        self.store.replace(state, {"type": "configuration-updated"})
         self.store.state_path.write_text("{}\n", encoding="utf-8")
 
         recovered = self.store.load()
@@ -74,8 +74,8 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(1, len(self.store.read_journal()))
         self.assertTrue(self.store.journal_path.read_bytes().endswith(b"\n"))
 
-        state["tasks"].append({"id": "after-recovery"})
-        self.store.replace(state, {"type": "task-imported"})
+        state["test_paths"].append("checks/**")
+        self.store.replace(state, {"type": "configuration-updated"})
         self.assertEqual([1, 2], [
             entry["sequence"] for entry in self.store.read_journal()
         ])
