@@ -22,6 +22,7 @@ from scaffold.store import Store
 
 
 SECRET = "sk-fixture-secret-1234567890"
+PATH_SECRET = "fixture-path-secret-987654321"
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -353,6 +354,36 @@ class RealAdapterFlightTests(unittest.TestCase):
         self.assertNotIn(SECRET, retained)
         self.assertIn("candidate contains a sensitive value in history", retained)
 
+    def test_sensitive_path_reusing_base_blob_is_not_published(self) -> None:
+        roster_path = self._write_roster("codex")
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": PATH_SECRET,
+                "SCAFFOLD_FIXTURE_MODE": "reuse-blob-sensitive-path",
+            },
+        ):
+            result = run_loop(
+                self.store,
+                self.product,
+                RosterAdapter(self.store, roster_path),
+                holder="fixture-worker",
+                dispatch_timeout=5,
+                durable_paths=(retained_plan_path(self.store),),
+            )
+
+        self.assertEqual("failed", result.status)
+        self.assertEqual(self.base_head, git(self.product, "rev-parse", "HEAD"))
+        task = self.store.load()["tasks"][0]
+        self.assertEqual(1, task["attempts"]["work"])
+        retained = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (self.workspace / "adapter-results").rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn(PATH_SECRET, retained)
+        self.assertIn("candidate contains a sensitive value in a path", retained)
+
     def _assert_vendor_flight(self, vendor: str) -> None:
         roster_path = self._write_roster(vendor)
         output = io.StringIO()
@@ -467,6 +498,8 @@ class RealAdapterFlightTests(unittest.TestCase):
                 subprocess.run(["git", "add", "transient.txt"], check=True)
                 subprocess.run(["git", "commit", "--quiet", "-m", "Add transient data"], check=True)
                 Path("transient.txt").unlink()
+            if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "reuse-blob-sensitive-path":
+                Path(os.environ["OPENAI_API_KEY"]).write_bytes(Path("README.md").read_bytes())
             content = "built by " + vendor + "\\n"
             if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "commit-secret":
                 content = os.environ["OPENAI_API_KEY"] + "\\n"

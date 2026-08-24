@@ -369,17 +369,45 @@ def _reject_candidate_secrets(
     *,
     timeout: float,
 ) -> None:
+    commits = _git(
+        checkout,
+        ("rev-list", f"{base_head}..{candidate_head}"),
+        timeout=timeout,
+    ).splitlines()
+    for commit in commits:
+        changed_paths = _git_bytes(
+            checkout,
+            (
+                "diff-tree",
+                "--root",
+                "-m",
+                "--no-commit-id",
+                "--name-only",
+                "-r",
+                "-z",
+                commit,
+            ),
+            timeout=timeout,
+        ).split(b"\0")
+        if any(
+            path and _payload_contains_secret(path, environment)
+            for path in changed_paths
+        ):
+            raise ValueError("candidate contains a sensitive value in a path")
     introduced_objects = _git_bytes(
         checkout,
-        ("rev-list", "--objects", f"{base_head}..{candidate_head}"),
+        (
+            "rev-list",
+            "--objects",
+            "--no-object-names",
+            f"{base_head}..{candidate_head}",
+        ),
         timeout=timeout,
     )
-    if _payload_contains_secret(introduced_objects, environment):
-        raise ValueError("candidate contains a sensitive value in a path")
     for row in introduced_objects.splitlines():
         if not row:
             continue
-        object_id = row.split(maxsplit=1)[0].decode("ascii")
+        object_id = row.decode("ascii")
         object_type = _git(
             checkout,
             ("cat-file", "-t", object_id),
