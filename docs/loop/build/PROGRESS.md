@@ -209,10 +209,16 @@ next iteration trusts this file over anything else.
   fixed-shape operator question land atomically in the canonical state and
   journal, while independent frontier work remains runnable. The real-adapter
   structured-output contract accepts ambiguity without publishing a candidate
-  and redacts its reason before durable retention. Seventy-four stdlib framework
-  tests and the full repository suite pass. The whole-build check advances
-  monotonically and exits 1 with `build incomplete: M5 review routing is not
-  implemented`.
+  and redacts its reason before durable retention. Independent review found three
+  medium dispatch-boundary defects: the CLI did not supply a real judge, immediate
+  judgment saw the pre-failure attempt snapshot, and ordinary real-worker failures
+  lost their concrete reason. `797c45e` (`Close M5 judgment dispatch gaps`) fixes
+  all three with a roster-backed read-only judge job, post-release judgment input,
+  and bounded redacted failure details. Executable Codex and Claude fixtures now
+  prove the CLI judge sees attempt three and the concrete failure without retaining
+  an echoed authentication secret. Seventy-six stdlib framework tests and the full
+  repository suite pass. The whole-build check advances monotonically and exits 1
+  with `build incomplete: M5 review routing is not implemented`.
 
 ## Next
 
@@ -225,7 +231,8 @@ next iteration trusts this file over anything else.
   folding chunk must route them rather than letting workers or judges mutate the
   graph directly.
 - Preserve the atomic parked-task/outbox transition, the pre-dispatch retry-cap
-  check, ambiguity's diagnostic accounting, and real-adapter ambiguity redaction.
+  check, ambiguity's diagnostic accounting, real-adapter ambiguity redaction, and
+  the roster-backed read-only judge's concrete redacted failure input.
 - Preserve the authenticated real-flight proof gap unless a later iteration has
   explicit network authority; do not weaken the M4 fixture coverage around it or
   reopen the green milestone for a review finding.
