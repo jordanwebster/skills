@@ -83,26 +83,47 @@ raise SystemExit(0 if passed else 1)
         git(self.product, "commit", "--quiet", "-m", "Initialize review product")
         self.base_head = git(self.product, "rev-parse", "HEAD")
 
-    def write_plan(self, severity_bar: str = "medium") -> Path:
+    def write_plan(
+        self,
+        severity_bar: str = "medium",
+        *,
+        downstream: bool = False,
+        remediation_test_changes: bool = False,
+        remediation_check: str = "python3 checks/structured.py fixed.txt",
+    ) -> Path:
+        tasks: list[dict[str, object]] = [
+            {
+                "id": "review",
+                "title": "Review the product",
+                "role": "reviewer",
+                "effort": "high",
+                "check": "python3 checks/structured.py",
+                "remediation_role": "implementer",
+                "remediation_effort": "high",
+                "remediation_check": remediation_check,
+                "remediation_test_changes": remediation_test_changes,
+                "depends_on": [],
+                "decisions": ["Review against the accepted design."],
+            }
+        ]
+        if downstream:
+            tasks.append(
+                {
+                    "id": "downstream",
+                    "title": "Use reviewed work",
+                    "role": "implementer",
+                    "effort": "small",
+                    "check": "python3 checks/structured.py downstream.txt",
+                    "depends_on": ["review"],
+                    "decisions": ["Run only after the review path is clear."],
+                }
+            )
         machine = {
             "schema_version": 1,
             "goal": "Route review findings",
             "test_paths": ["checks/**"],
             "review_severity_bar": severity_bar,
-            "tasks": [
-                {
-                    "id": "review",
-                    "title": "Review the product",
-                    "role": "reviewer",
-                    "effort": "high",
-                    "check": "python3 checks/structured.py",
-                    "remediation_role": "implementer",
-                    "remediation_effort": "high",
-                    "remediation_check": "python3 checks/structured.py fixed.txt",
-                    "depends_on": [],
-                    "decisions": ["Review against the accepted design."],
-                }
-            ],
+            "tasks": tasks,
         }
         path = self.root / "plan.html"
         path.write_text(
@@ -118,10 +139,10 @@ raise SystemExit(0 if passed else 1)
         path.write_text(json.dumps({"steps": steps}) + "\n", encoding="utf-8")
         return path
 
-    def make_store(self) -> Store:
+    def make_store(self, **plan_options: object) -> Store:
         store = Store(self.root / "flight")
         store.create(initial_state("Route review findings"))
-        import_plan(store, self.write_plan())
+        import_plan(store, self.write_plan(**plan_options))
         return store
 
     def test_above_bar_finding_spawns_remediation_and_one_clean_rereview(self) -> None:
@@ -238,6 +259,91 @@ raise SystemExit(0 if passed else 1)
             state["tasks"][2]["judgments"][-1]["decision"],
         )
 
+    def test_remediation_and_rereview_gate_existing_successors(self) -> None:
+        store = self.make_store(downstream=True)
+        remediation_id = derived_id("remediate", "review", "unsafe-boundary")
+        rereview_id = derived_id("rereview", "review", "unsafe-boundary")
+        script = self.write_script(
+            [
+                {
+                    "task_id": "review",
+                    "review": {
+                        "findings": [finding("unsafe-boundary", "high")]
+                    },
+                },
+                {
+                    "task_id": remediation_id,
+                    "commit_message": "Fix before downstream work",
+                    "writes": {"fixed.txt": "fixed\n"},
+                },
+                {
+                    "task_id": rereview_id,
+                    "review": {"findings": []},
+                },
+                {
+                    "task_id": "downstream",
+                    "commit_message": "Use reviewed work",
+                    "writes": {"downstream.txt": "used\n"},
+                },
+            ]
+        )
+
+        result = run_loop(
+            store,
+            self.product,
+            FakeAdapter(script, store),
+            holder="review-worker",
+        )
+
+        self.assertEqual("complete", result.status, result.reason)
+        self.assertEqual(
+            ("review", remediation_id, rereview_id, "downstream"),
+            result.completed_task_ids,
+        )
+        tasks = {task["id"]: task for task in store.load()["tasks"]}
+        self.assertEqual([rereview_id], tasks["downstream"]["depends_on"])
+
+    def test_plan_owned_test_scope_reaches_derived_remediation(self) -> None:
+        store = self.make_store(
+            remediation_test_changes=True,
+            remediation_check=(
+                "python3 checks/structured.py checks/regression.txt"
+            ),
+        )
+        remediation_id = derived_id("remediate", "review", "regression-gap")
+        rereview_id = derived_id("rereview", "review", "regression-gap")
+        script = self.write_script(
+            [
+                {
+                    "task_id": "review",
+                    "review": {
+                        "findings": [finding("regression-gap", "medium")]
+                    },
+                },
+                {
+                    "task_id": remediation_id,
+                    "commit_message": "Add reviewed regression",
+                    "writes": {"checks/regression.txt": "covered\n"},
+                },
+                {
+                    "task_id": rereview_id,
+                    "review": {"findings": []},
+                },
+            ]
+        )
+
+        result = run_loop(
+            store,
+            self.product,
+            FakeAdapter(script, store),
+            holder="review-worker",
+        )
+
+        self.assertEqual("complete", result.status, result.reason)
+        tasks = {task["id"]: task for task in store.load()["tasks"]}
+        self.assertTrue(tasks[remediation_id]["test_changes"])
+        self.assertEqual("green", tasks[remediation_id]["verdict"])
+
     def test_below_bar_review_completes_without_graph_mutation(self) -> None:
         store = self.make_store()
         script = self.write_script(
@@ -259,6 +365,43 @@ raise SystemExit(0 if passed else 1)
         self.assertEqual("complete", result.status, result.reason)
         self.assertEqual(["review"], [task["id"] for task in store.load()["tasks"]])
         self.assertEqual(self.base_head, git(self.product, "rev-parse", "HEAD"))
+
+    def test_legacy_imported_state_migrates_to_medium_review_bar(self) -> None:
+        store = self.make_store()
+        rows = store.read_journal()
+        for row in rows:
+            row["state_after"].pop("review_severity_bar", None)
+            if row["transition"].get("type") == "plan-imported":
+                row["transition"].pop("review_severity_bar", None)
+            canonical = json.dumps(
+                row["state_after"],
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            row["state_hash"] = hashlib.sha256(canonical).hexdigest()
+        store.journal_path.write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+            encoding="utf-8",
+        )
+        materialized = json.loads(store.state_path.read_text(encoding="utf-8"))
+        materialized.pop("review_severity_bar", None)
+        store.state_path.write_text(
+            json.dumps(materialized, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual("medium", store.load()["review_severity_bar"])
+        script = self.write_script(
+            [{"task_id": "review", "review": {"findings": []}}]
+        )
+        result = run_loop(
+            store,
+            self.product,
+            FakeAdapter(script, store),
+            holder="review-worker",
+        )
+        self.assertEqual("complete", result.status, result.reason)
 
     def test_plan_rejects_unknown_review_severity(self) -> None:
         with self.assertRaisesRegex(PlanError, "review_severity_bar"):

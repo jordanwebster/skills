@@ -197,6 +197,7 @@ def _plan_task(value: Any) -> dict[str, Any]:
         remediation_role = value.get("remediation_role", "implementer")
         remediation_effort = value.get("remediation_effort", value["effort"])
         remediation_check = value.get("remediation_check", value["check"])
+        remediation_test_changes = value.get("remediation_test_changes", False)
         for field, candidate in (
             ("remediation_role", remediation_role),
             ("remediation_effort", remediation_effort),
@@ -206,6 +207,8 @@ def _plan_task(value: Any) -> dict[str, Any]:
                 raise PlanError(f"review task {field} must be non-empty text")
         if remediation_role != "implementer":
             raise PlanError("review task remediation_role must be implementer")
+        if not isinstance(remediation_test_changes, bool):
+            raise PlanError("review task remediation_test_changes must be a boolean")
         review = {
             "origin_task_id": value["id"],
             "round": 0,
@@ -213,6 +216,7 @@ def _plan_task(value: Any) -> dict[str, Any]:
                 "role": remediation_role,
                 "effort": remediation_effort,
                 "check": remediation_check,
+                "test_changes": remediation_test_changes,
             },
             "findings": None,
         }

@@ -591,7 +591,10 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("state must be an object")
     normalized = deepcopy(dict(state))
     normalized.setdefault("plan_digest", None)
-    normalized.setdefault("review_severity_bar", None)
+    if "review_severity_bar" not in normalized:
+        normalized["review_severity_bar"] = (
+            "medium" if normalized.get("plan_digest") is not None else None
+        )
     normalized.setdefault("outbox", [])
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"state schema_version must be {SCHEMA_VERSION}")
@@ -700,6 +703,7 @@ def _normalize_task(task: Any) -> dict[str, Any]:
                     "role": "implementer",
                     "effort": normalized["effort"],
                     "check": normalized["check"],
+                    "test_changes": False,
                 },
                 "findings": None,
             }
@@ -883,16 +887,22 @@ def _normalize_review_task(value: Any) -> dict[str, Any]:
     if normalized.get("round") not in {0, 1}:
         raise ValueError("review round must be zero or one")
     remediation = normalized.get("remediation")
+    if isinstance(remediation, Mapping):
+        remediation = dict(remediation)
+        remediation.setdefault("test_changes", False)
     if not isinstance(remediation, Mapping) or set(remediation) != {
         "role",
         "effort",
         "check",
+        "test_changes",
     }:
         raise ValueError("review remediation template has the wrong fields")
     for field in ("role", "effort", "check"):
         _required_text(remediation, field)
     if remediation["role"] != "implementer":
         raise ValueError("review remediation role must be implementer")
+    if not isinstance(remediation["test_changes"], bool):
+        raise ValueError("review remediation test_changes must be a boolean")
     normalized["remediation"] = dict(remediation)
     findings = normalized.get("findings")
     if findings is not None:
@@ -1217,6 +1227,17 @@ def _apply_review_routing(
         return
 
     existing_ids = {item["id"] for item in state["tasks"]}
+    planned_successors = [
+        item for item in state["tasks"] if task["id"] in item["depends_on"]
+    ]
+    rereview_id = _derived_task_id(
+        "rereview",
+        review["origin_task_id"],
+        ",".join(item["id"] for item in actionable),
+    )
+    if rereview_id in existing_ids:
+        raise InvalidTransition("derived re-review task id already exists")
+    existing_ids.add(rereview_id)
     remediation_ids: list[str] = []
     template = review["remediation"]
     for position, finding in enumerate(actionable, start=1):
@@ -1246,7 +1267,7 @@ def _apply_review_routing(
                         f"Finding evidence: {finding['evidence']}",
                         f"Finding position: {position} of {len(actionable)}",
                     ],
-                    "test_changes": False,
+                    "test_changes": template["test_changes"],
                     "attempts": {"work": 0, "infra": 0, "diagnostic": 0},
                     "completion": "pending",
                     "verdict": None,
@@ -1265,13 +1286,6 @@ def _apply_review_routing(
             )
         )
 
-    rereview_id = _derived_task_id(
-        "rereview",
-        review["origin_task_id"],
-        ",".join(item["id"] for item in actionable),
-    )
-    if rereview_id in existing_ids:
-        raise InvalidTransition("derived re-review task id already exists")
     state["tasks"].append(
         _normalize_task(
             {
@@ -1309,6 +1323,11 @@ def _apply_review_routing(
             }
         )
     )
+    for successor in planned_successors:
+        successor["depends_on"] = [
+            rereview_id if dependency == task["id"] else dependency
+            for dependency in successor["depends_on"]
+        ]
 
 
 def _derived_task_id(kind: str, *parts: str) -> str:
