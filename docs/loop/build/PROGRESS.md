@@ -8,8 +8,9 @@ next iteration trusts this file over anything else.
 - [x] M0 — Skeleton: package layout, store read/write/journal, toy-flight goal
       function created and red. Check: check.sh exists, executes, and fails for
       the right reason.
-- [x] M1 — Loop on fake adapter: selection, leasing, prompt assembly, apply.
-      Check: toy flight goes green end-to-end unattended.
+- [ ] M1 — Loop on fake adapter: selection, leasing, prompt assembly, apply.
+      The toy-flight check is green, but independent re-check found one remaining
+      medium plan-source immutability defect; M1 is not complete until it is fixed.
 - [ ] M2 — Verification runner: test-glob diff-gate, verdict enum,
       malformed-reddens-task, artifact-based judgment. Check: seeded lying-worker
       and bad-paperwork tests pass; toy flight stays green.
@@ -35,7 +36,7 @@ next iteration trusts this file over anything else.
   and the permanent `docs/loop/build/check.sh` entry point. Eight stdlib unit tests
   and the full repository suite pass. The whole-build check intentionally exits 1
   with `build incomplete: M1 toy-flight runner is not implemented`.
-- 2026-08-24 — M1 complete in `667c589` (`Implement M1 fake-adapter build
+- 2026-08-24 — M1 implementation advanced in `667c589` (`Implement M1 fake-adapter build
   loop`), with the independently replayable loop-test fix in `b93fd52` (`Make M1
   loop test independently replayable`) and cross-process lease proof in `347e176`
   (`Prove M1 lease contention across processes`). The single independent-review fix
@@ -49,12 +50,25 @@ next iteration trusts this file over anything else.
   candidate-commit identity checks, and the `init` / `plan-import` / foreground
   `run` CLI slice. The fresh-repository toy flight now lands two dependency-ordered
   product commits and wraps green through the CLI. Twenty-six stdlib unit tests and the
-  full repository suite pass. The whole-build check intentionally exits 1 with
-  `build incomplete: seeded-failure suite is not implemented`.
+  full repository suite pass. Independent review found six boundary defects;
+  `53a0e1b` fixed all six named cases, but the one allowed
+  re-check showed that the plan-source fix was incomplete: changing only readable HTML
+  prose preserves the canonical machine digest and overwrites the active retained plan
+  before the second import is rejected. Per Handoff's bounded review rule, no second
+  automatic fix round was taken this iteration, so M1 remains in progress. The
+  whole-build check honestly exits 1 with `build incomplete: M1 retained plan can
+  change after rejected import`.
 
 ## Next
 
-- Build M2 only: add the verification runner's restore-and-hash isolation, closed
+- Finish M1 before any M2 work: make the digest-addressed retained plan write-once.
+  If its path already exists with identical bytes, leave it untouched; if the bytes
+  differ, reject before writing. Add a regression that re-imports identical machine
+  JSON surrounded by changed prose and proves the active prompt source is unchanged.
+  Re-run the M1 proofs, restore `check.sh`'s next reason to the missing seeded-failure
+  suite, and obtain an independent check of this exact finding.
+- After M1 is complete, build M2 only: add the verification runner's
+  restore-and-hash isolation, closed
   verdict artifacts, test-glob diff gating, artifact-based judgment, and the
   malformed-evidence boundary that reddens only its task. Seed the lying-worker and
   bad-paperwork failures while keeping the M1 toy flight green.

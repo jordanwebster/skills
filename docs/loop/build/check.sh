@@ -20,5 +20,5 @@ if ! goal_output=$(timeout 120 env PYTHONPATH="$framework_root" \
     exit 1
 fi
 
-echo "build incomplete: seeded-failure suite is not implemented"
+echo "build incomplete: M1 retained plan can change after rejected import"
 exit 1
