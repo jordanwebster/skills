@@ -12,7 +12,7 @@ next iteration trusts this file over anything else.
       Check: the toy flight runs green end-to-end unattended; retained-plan
       publication is crash-durable across fresh-directory creation and identical
       retries.
-- [ ] M2 — Verification runner: test-glob diff-gate, verdict enum,
+- [x] M2 — Verification runner: test-glob diff-gate, verdict enum,
       malformed-reddens-task, artifact-based judgment. Check: seeded lying-worker
       and bad-paperwork tests pass; toy flight stays green.
 - [ ] M3 — Supervision: heartbeat, flock, pgid kill, drain; start survives the
@@ -90,21 +90,32 @@ next iteration trusts this file over anything else.
   injected fsync ordering rather than a real power-loss/filesystem recovery test.
   The whole-build check now honestly exits 1 with `build incomplete: M2
   seeded-failure suite is not implemented`.
+- 2026-08-24 — M2 completed in `3cc295a` (`Implement M2 verification runner`).
+  The loop now captures the pre-dispatch product head, restores each claimed
+  descendant commit in a detached local clone, fingerprints plan-declared test and
+  check paths at both commits, and applies only a digest-bound framework verdict
+  artifact. Checks must write a candidate- and command-bound JSON result with named
+  observations; bare success exits, malformed paperwork, mismatched identities,
+  shrinking observation sets, and out-of-scope protected edits cannot flip green.
+  Red evidence terminates only its task, leaving independent frontier work runnable;
+  infra and killed verification end the slice without burning the work-attempt count,
+  while malformed machinery stops the line. Forty-one stdlib framework tests and the
+  full repository suite pass, including the seeded lying-worker, bad-paperwork, and
+  protected-edit cases. The whole-build check honestly exits 1 with `build incomplete:
+  M3 supervision is not implemented`.
 
 ## Next
 
-- Build M2 only: add the verification runner's restore-and-hash isolation, closed
-  verdict artifacts, test-glob diff gating, artifact-based judgment, and the
-  malformed-evidence boundary that reddens only its task. Seed the lying-worker and
-  bad-paperwork failures while keeping the M1 toy flight green.
-- Replace M1's deliberately narrow `candidate-is-clean-head` identity check in
-  `framework/scaffold/loop.py` with the M2 runner result. Task `check` commands are
-  imported and prompted now but intentionally are not trusted or executed by M1.
-- Extend the same fake-adapter script and temporary product repository rather than
-  creating a second toy path. The fake script schema is `{"steps": [...]}` with one
-  ordered task id, commit message, write map, and optional artifact list per step.
-- Keep `check.sh` non-zero after M2 because supervision, real-adapter, and M5 seeded
-  failures will still be absent; change its one-line reason only to the first genuine
-  unfinished whole-build requirement.
+- Build M3 only: add framework-owned foreground/supervised lifetime with heartbeat
+  files, an independently held run lock, process-group stop, and boundary drain.
+- Seed stillborn launch and stale-liveness failures, then prove killing the driver
+  mid-task and relaunching resumes from durable store/claim/verdict state without a
+  second writer or duplicate green transition.
+- Preserve M2's artifact protocol and use the retained verification durations when
+  supervision resumes a check; a supervisor must never infer liveness from a pid
+  alone.
+- Keep `check.sh` non-zero after M3 because real adapters and M5 seeded failures will
+  remain absent; change its one-line reason only to the first genuine unfinished
+  whole-build requirement.
 - Imports currently use `PYTHONPATH=framework`; installation and the stable executable
   surface remain future milestone work.
