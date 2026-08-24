@@ -5,7 +5,7 @@ next iteration trusts this file over anything else.
 
 ## Milestones (from docs/loop/build-plan.html — strictly in order)
 
-- [ ] M0 — Skeleton: package layout, store read/write/journal, toy-flight goal
+- [x] M0 — Skeleton: package layout, store read/write/journal, toy-flight goal
       function created and red. Check: check.sh exists, executes, and fails for
       the right reason.
 - [ ] M1 — Loop on fake adapter: selection, leasing, prompt assembly, apply.
@@ -28,4 +28,23 @@ next iteration trusts this file over anything else.
 
 ## Iteration log
 
-(nothing yet — the first iteration starts here)
+- 2026-08-24 — M0 complete in `f06ba82` (`Establish loop framework skeleton and
+  durable store`). Landed the top-level `framework/scaffold` package, a versioned
+  JSON task state with atomic materialization and an append-only hashed journal,
+  torn-tail recovery and corruption checks, the red-first toy-flight goal function,
+  and the permanent `docs/loop/build/check.sh` entry point. Eight stdlib unit tests
+  and the full repository suite pass. The whole-build check intentionally exits 1
+  with `build incomplete: M1 toy-flight runner is not implemented`.
+
+## Next
+
+- Build M1 only: import the plan's canonical JSON into the task graph; implement
+  dependency/profile frontier selection, single-worker leases with expiry, durable
+  prompt assembly, the fake adapter, typed worker claims, and framework-owned apply.
+- Replace the M0 toy-flight placeholder with the M1 slice of a
+  fresh-temporary-repository flight: init → plan-import → fake-worker loop → wrap,
+  green unattended. Later milestones will extend that same flight through induced
+  stall and escalation. Keep `check.sh` non-zero after the M1 slice succeeds because
+  the complete seeded-failure suite required for the finish line will still be absent.
+- Imports currently use `PYTHONPATH=framework`; installation and the stable executable
+  surface remain future milestone work.
