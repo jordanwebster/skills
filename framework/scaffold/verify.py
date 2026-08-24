@@ -79,6 +79,7 @@ def verify(
     test_changes = task.get("test_changes", False)
     if not isinstance(test_changes, bool):
         raise ValueError("task test_changes must be a boolean")
+    reviewer_task = task.get("role") == "reviewer"
 
     product = Path(product_root).resolve()
     store = Path(store_root).resolve()
@@ -118,7 +119,15 @@ def verify(
             )
         _git(product, "cat-file", "-e", f"{base_head}^{{commit}}")
         _git(product, "cat-file", "-e", f"{candidate_head}^{{commit}}")
-        if base_head == candidate_head:
+        if reviewer_task and base_head != candidate_head:
+            return _finish(
+                run_root,
+                store,
+                common,
+                "red",
+                "reviewer task must not change the product commit",
+            )
+        if not reviewer_task and base_head == candidate_head:
             return _finish(
                 run_root,
                 store,

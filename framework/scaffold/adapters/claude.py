@@ -29,6 +29,7 @@ class ClaudeAdapter(ProcessAdapter):
         checkout: Path,
         schema_path: Path,
         raw_last_path: Path,
+        sandbox: str,
     ) -> list[str]:
         arguments = list(self.binding.args)
         if arguments not in (["-p"], ["--print"]):
@@ -43,7 +44,9 @@ class ClaudeAdapter(ProcessAdapter):
                         "enabled": True,
                         "autoAllowBashIfSandboxed": True,
                         "filesystem": {
-                            "allowWrite": [str(checkout)],
+                            "allowWrite": (
+                                [str(checkout)] if sandbox == "workspace-write" else []
+                            ),
                             "denyWrite": [
                                 str(checkout / ".scaffolding"),
                                 str(checkout / ".SCAFFOLDING"),
@@ -75,7 +78,11 @@ class ClaudeAdapter(ProcessAdapter):
             "--no-session-persistence",
             "--no-chrome",
             "--tools",
-            "Bash,Edit,Read,Write,Glob,Grep",
+            (
+                "Bash,Edit,Read,Write,Glob,Grep"
+                if sandbox == "workspace-write"
+                else "Bash,Read,Glob,Grep"
+            ),
             "--output-format",
             "json",
             "--json-schema",

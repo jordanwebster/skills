@@ -22,6 +22,7 @@ from .judge import normalize_decision
 
 
 SCHEMA_VERSION = 1
+REVIEW_SEVERITIES = ("low", "medium", "high", "critical")
 
 
 class StoreError(Exception):
@@ -68,6 +69,7 @@ def initial_state(goal: str, *, test_paths: list[str] | None = None) -> dict[str
         "goal": goal,
         "test_paths": paths,
         "plan_digest": None,
+        "review_severity_bar": None,
         "tasks": [],
         "outbox": [],
     }
@@ -265,6 +267,10 @@ class Store:
         with self._locked():
             state = self._load_unlocked()
             task = _task_by_id(state, task_id)
+            if task["role"] == "reviewer" and normalized.get("review") is None:
+                raise InvalidTransition("reviewer claim must contain a review result")
+            if task["role"] != "reviewer" and normalized.get("review") is not None:
+                raise InvalidTransition("only reviewer tasks may file review findings")
             lease = task["lease"]
             if lease is None or lease["holder"] != normalized["holder"]:
                 raise InvalidTransition("claim holder does not own the task lease")
@@ -493,6 +499,13 @@ class Store:
             }
         )
         task["lease"] = None
+        if verification["verdict"] == "green" and task["role"] == "reviewer":
+            _apply_review_routing(
+                state,
+                task,
+                claim["review"],
+                observed_at=float(observed_at),
+            )
 
     def _read_verification(
         self, relative_name: str, expected_sha256: str
@@ -578,6 +591,7 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("state must be an object")
     normalized = deepcopy(dict(state))
     normalized.setdefault("plan_digest", None)
+    normalized.setdefault("review_severity_bar", None)
     normalized.setdefault("outbox", [])
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"state schema_version must be {SCHEMA_VERSION}")
@@ -592,10 +606,30 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
         or not normalized["plan_digest"]
     ):
         raise ValueError("state plan_digest must be a non-empty string or null")
+    if normalized["review_severity_bar"] is not None and (
+        normalized["review_severity_bar"] not in REVIEW_SEVERITIES
+    ):
+        raise ValueError(
+            "state review_severity_bar must be low, medium, high, critical, or null"
+        )
     if not isinstance(normalized.get("tasks"), list):
         raise ValueError("state tasks must be a list")
     normalized["tasks"] = [_normalize_task(task) for task in normalized["tasks"]]
     _validate_graph(normalized["tasks"])
+    tasks_by_id = {task["id"]: task for task in normalized["tasks"]}
+    for task in normalized["tasks"]:
+        review = task["review"]
+        if review is None:
+            continue
+        origin = tasks_by_id.get(review["origin_task_id"])
+        if review["round"] == 0 and review["origin_task_id"] != task["id"]:
+            raise ValueError("initial review must name itself as its origin")
+        if review["round"] == 1 and (
+            origin is None
+            or origin["role"] != "reviewer"
+            or origin["review"]["round"] != 0
+        ):
+            raise ValueError("re-review must name an initial reviewer task")
     if not isinstance(normalized.get("outbox"), list):
         raise ValueError("state outbox must be a list")
     normalized["outbox"] = [
@@ -604,7 +638,6 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
     escalation_ids = [item["id"] for item in normalized["outbox"]]
     if len(set(escalation_ids)) != len(escalation_ids):
         raise ValueError("state outbox ids must be unique")
-    tasks_by_id = {task["id"]: task for task in normalized["tasks"]}
     for escalation in normalized["outbox"]:
         task = tasks_by_id.get(escalation["task_id"])
         if task is None:
@@ -627,6 +660,7 @@ def _normalize_task(task: Any) -> dict[str, Any]:
     normalized.setdefault("test_changes", False)
     normalized.setdefault("parked", False)
     normalized.setdefault("judgments", [])
+    normalized.setdefault("review", None)
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"task schema_version must be {SCHEMA_VERSION}")
     for field in ("id", "title", "role", "effort", "check"):
@@ -656,6 +690,22 @@ def _normalize_task(task: Any) -> dict[str, Any]:
         for judgment in normalized["judgments"]
     ):
         raise ValueError("task judgment names a different task")
+    review = normalized["review"]
+    if normalized["role"] == "reviewer":
+        if review is None:
+            review = {
+                "origin_task_id": normalized["id"],
+                "round": 0,
+                "remediation": {
+                    "role": "implementer",
+                    "effort": normalized["effort"],
+                    "check": normalized["check"],
+                },
+                "findings": None,
+            }
+        normalized["review"] = _normalize_review_task(review)
+    elif review is not None:
+        raise ValueError("only reviewer tasks may contain review routing state")
     attempts = normalized.get("attempts")
     if not isinstance(attempts, Mapping) or set(attempts) != {
         "work",
@@ -768,6 +818,18 @@ def _normalize_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(claim, Mapping):
         raise ValueError("claim must be an object")
     normalized = deepcopy(dict(claim))
+    allowed = {
+        "schema_version",
+        "task_id",
+        "holder",
+        "lease_id",
+        "claim",
+        "candidate_head",
+        "artifacts",
+        "review",
+    }
+    if set(normalized) - allowed:
+        raise ValueError("claim has unexpected fields")
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"claim schema_version must be {SCHEMA_VERSION}")
     for field in ("task_id", "holder", "lease_id", "candidate_head"):
@@ -779,7 +841,64 @@ def _normalize_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
         not isinstance(item, str) or not item for item in normalized["artifacts"]
     ):
         raise ValueError("claim artifacts must be a list of non-empty strings")
+    review = normalized.get("review")
+    if review is not None:
+        normalized["review"] = _normalize_review_result(review)
     _canonical_json(normalized)
+    return normalized
+
+
+def _normalize_review_result(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {"findings"}:
+        raise ValueError("review result must contain only findings")
+    findings = value["findings"]
+    if not isinstance(findings, list):
+        raise ValueError("review findings must be a list")
+    normalized = [_normalize_review_finding(item) for item in findings]
+    ids = [item["id"] for item in normalized]
+    if len(set(ids)) != len(ids):
+        raise ValueError("review finding ids must be unique")
+    return {"findings": normalized}
+
+
+def _normalize_review_finding(value: Any) -> dict[str, str]:
+    required = {"id", "severity", "summary", "evidence"}
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("review finding has the wrong fields")
+    normalized = deepcopy(dict(value))
+    validate_task_id(normalized.get("id"))
+    if normalized.get("severity") not in REVIEW_SEVERITIES:
+        raise ValueError("review finding severity is outside the closed enum")
+    for field in ("summary", "evidence"):
+        _required_text(normalized, field)
+    return normalized
+
+
+def _normalize_review_task(value: Any) -> dict[str, Any]:
+    required = {"origin_task_id", "round", "remediation", "findings"}
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("review routing state has the wrong fields")
+    normalized = deepcopy(dict(value))
+    validate_task_id(normalized.get("origin_task_id"))
+    if normalized.get("round") not in {0, 1}:
+        raise ValueError("review round must be zero or one")
+    remediation = normalized.get("remediation")
+    if not isinstance(remediation, Mapping) or set(remediation) != {
+        "role",
+        "effort",
+        "check",
+    }:
+        raise ValueError("review remediation template has the wrong fields")
+    for field in ("role", "effort", "check"):
+        _required_text(remediation, field)
+    if remediation["role"] != "implementer":
+        raise ValueError("review remediation role must be implementer")
+    normalized["remediation"] = dict(remediation)
+    findings = normalized.get("findings")
+    if findings is not None:
+        normalized["findings"] = _normalize_review_result(
+            {"findings": findings}
+        )["findings"]
     return normalized
 
 
@@ -922,10 +1041,12 @@ def _apply_plan_imported(
         raise InvalidTransition("imported plan goal does not match initialized goal")
     digest = _required_text(transition, "plan_digest")
     test_paths = transition.get("test_paths")
+    review_severity_bar = transition.get("review_severity_bar", "medium")
     tasks = transition.get("tasks")
     candidate = deepcopy(state)
     candidate["plan_digest"] = digest
     candidate["test_paths"] = deepcopy(test_paths)
+    candidate["review_severity_bar"] = review_severity_bar
     candidate["tasks"] = deepcopy(tasks)
     normalized = _normalize_state(candidate)
     state.clear()
@@ -1025,6 +1146,176 @@ def _apply_task_judged(
     )
 
 
+def _apply_review_routing(
+    state: dict[str, Any],
+    task: dict[str, Any],
+    review_result: Mapping[str, Any],
+    *,
+    observed_at: float,
+) -> None:
+    review = task["review"]
+    if review is None:
+        raise InvalidTransition("completed reviewer task lacks routing state")
+    if review["findings"] is not None:
+        raise InvalidTransition("review findings were already routed")
+    findings = _normalize_review_result(review_result)["findings"]
+    review["findings"] = findings
+    severity_bar = state.get("review_severity_bar")
+    if severity_bar not in REVIEW_SEVERITIES:
+        raise InvalidTransition("flight lacks a valid review severity bar")
+    bar_index = REVIEW_SEVERITIES.index(severity_bar)
+    actionable = [
+        finding
+        for finding in findings
+        if REVIEW_SEVERITIES.index(finding["severity"]) >= bar_index
+    ]
+    if not actionable:
+        return
+
+    if review["round"] == 1:
+        reason = (
+            f"The bounded re-review still found {len(actionable)} finding(s) "
+            f"at or above the {severity_bar} severity bar."
+        )
+        decision = {
+            "schema_version": SCHEMA_VERSION,
+            "task_id": task["id"],
+            "trigger": "review-findings",
+            "decision": "defer-to-operator",
+            "reason": reason,
+            "source": "framework-rule",
+            "observed_at": observed_at,
+        }
+        task["judgments"].append(decision)
+        task["parked"] = True
+        escalation_id = "esc-review-" + hashlib.sha256(
+            (task["id"] + "\0" + ",".join(item["id"] for item in actionable)).encode(
+                "utf-8"
+            )
+        ).hexdigest()[:16]
+        if any(item["id"] == escalation_id for item in state["outbox"]):
+            raise InvalidTransition("review escalation id already exists")
+        state["outbox"].append(
+            {
+                "id": escalation_id,
+                "task_id": task["id"],
+                "trigger": "review-findings",
+                "blocked_on": reason,
+                "proposed_action": (
+                    "Revise the plan or explicitly accept the remaining findings "
+                    "before continuing."
+                ),
+                "effect": (
+                    "The reviewed work stays verified, but the flight cannot finish "
+                    "while this question is open."
+                ),
+                "request": "veto-or-confirm",
+                "status": "open",
+                "created_at": observed_at,
+            }
+        )
+        return
+
+    existing_ids = {item["id"] for item in state["tasks"]}
+    remediation_ids: list[str] = []
+    template = review["remediation"]
+    for position, finding in enumerate(actionable, start=1):
+        remediation_id = _derived_task_id(
+            "remediate",
+            review["origin_task_id"],
+            finding["id"],
+        )
+        if remediation_id in existing_ids:
+            raise InvalidTransition("derived remediation task id already exists")
+        existing_ids.add(remediation_id)
+        remediation_ids.append(remediation_id)
+        state["tasks"].append(
+            _normalize_task(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "id": remediation_id,
+                    "title": f"Remediate review finding {finding['id']}",
+                    "role": template["role"],
+                    "effort": template["effort"],
+                    "check": template["check"],
+                    "depends_on": [task["id"]],
+                    "decisions": [
+                        f"Source review: {task['id']}",
+                        f"Finding severity: {finding['severity']}",
+                        f"Finding summary: {finding['summary']}",
+                        f"Finding evidence: {finding['evidence']}",
+                        f"Finding position: {position} of {len(actionable)}",
+                    ],
+                    "test_changes": False,
+                    "attempts": {"work": 0, "infra": 0, "diagnostic": 0},
+                    "completion": "pending",
+                    "verdict": None,
+                    "parked": False,
+                    "judgments": [],
+                    "review": None,
+                    "evidence": [],
+                    "verified_head": None,
+                    "lineage": {
+                        "retired": False,
+                        "revoked": False,
+                        "superseded_by": None,
+                    },
+                    "lease": None,
+                }
+            )
+        )
+
+    rereview_id = _derived_task_id(
+        "rereview",
+        review["origin_task_id"],
+        ",".join(item["id"] for item in actionable),
+    )
+    if rereview_id in existing_ids:
+        raise InvalidTransition("derived re-review task id already exists")
+    state["tasks"].append(
+        _normalize_task(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "id": rereview_id,
+                "title": f"Re-review remediation from {task['title']}",
+                "role": "reviewer",
+                "effort": task["effort"],
+                "check": task["check"],
+                "depends_on": remediation_ids,
+                "decisions": [
+                    f"This is the only re-review round for {task['id']}.",
+                    "Review the remediations for the recorded at-or-above-bar findings.",
+                ],
+                "test_changes": False,
+                "attempts": {"work": 0, "infra": 0, "diagnostic": 0},
+                "completion": "pending",
+                "verdict": None,
+                "parked": False,
+                "judgments": [],
+                "review": {
+                    "origin_task_id": review["origin_task_id"],
+                    "round": 1,
+                    "remediation": deepcopy(template),
+                    "findings": None,
+                },
+                "evidence": [],
+                "verified_head": None,
+                "lineage": {
+                    "retired": False,
+                    "revoked": False,
+                    "superseded_by": None,
+                },
+                "lease": None,
+            }
+        )
+    )
+
+
+def _derived_task_id(kind: str, *parts: str) -> str:
+    digest = hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:16]
+    return f"{kind}-{digest}"
+
+
 def _normalize_recorded_judgment(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ValueError("recorded judgment must be an object")
@@ -1044,11 +1335,11 @@ def _normalize_recorded_judgment(value: Any) -> dict[str, Any]:
     if source not in {"judge", "framework-rule", "fallback"}:
         raise ValueError("recorded judgment source is invalid")
     if source == "framework-rule" and (
-        decision["trigger"] != "ambiguity"
+        decision["trigger"] not in {"ambiguity", "review-findings"}
         or decision["decision"] != "defer-to-operator"
     ):
         raise ValueError(
-            "framework-rule judgments are reserved for ambiguity escalation"
+            "framework-rule judgments are reserved for mandatory escalations"
         )
     if source == "fallback" and decision["decision"] != "defer-to-operator":
         raise ValueError("fallback judgments must defer to the operator")
@@ -1098,6 +1389,7 @@ def _normalize_escalation(value: Any) -> dict[str, Any]:
         "stall",
         "identical-error",
         "wall-clock-cap",
+        "review-findings",
     }:
         raise ValueError("escalation trigger is outside the closed trigger enum")
     if normalized["request"] != "veto-or-confirm":

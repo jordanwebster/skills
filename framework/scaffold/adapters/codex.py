@@ -23,6 +23,7 @@ class CodexAdapter(ProcessAdapter):
         checkout: Path,
         schema_path: Path,
         raw_last_path: Path,
+        sandbox: str,
     ) -> list[str]:
         arguments = list(self.binding.args)
         if arguments != ["exec"]:
@@ -44,7 +45,7 @@ class CodexAdapter(ProcessAdapter):
             self.binding.model,
             *effort_args,
             "--sandbox",
-            "workspace-write",
+            sandbox,
             "--ignore-user-config",
             "-c",
             "shell_environment_policy.inherit=core",

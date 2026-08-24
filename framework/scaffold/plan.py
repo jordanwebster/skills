@@ -29,6 +29,7 @@ class ImportedPlan:
 
     goal: str
     test_paths: list[str]
+    review_severity_bar: str
     tasks: list[dict[str, Any]]
     digest: str
 
@@ -115,6 +116,7 @@ def import_plan(store: Store, path: str | Path) -> ImportedPlan:
             "type": "plan-imported",
             "goal": plan.goal,
             "test_paths": plan.test_paths,
+            "review_severity_bar": plan.review_severity_bar,
             "tasks": plan.tasks,
             "plan_digest": plan.digest,
         }
@@ -144,6 +146,11 @@ def _normalize_plan(value: Any) -> ImportedPlan:
         not isinstance(path, str) or not path for path in test_paths
     ):
         raise PlanError("plan test_paths must be a list of non-empty strings")
+    review_severity_bar = value.get("review_severity_bar", "medium")
+    if review_severity_bar not in {"low", "medium", "high", "critical"}:
+        raise PlanError(
+            "plan review_severity_bar must be low, medium, high, or critical"
+        )
     raw_tasks = value.get("tasks")
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise PlanError("plan tasks must be a non-empty list")
@@ -152,10 +159,17 @@ def _normalize_plan(value: Any) -> ImportedPlan:
         "schema_version": SCHEMA_VERSION,
         "goal": goal,
         "test_paths": list(test_paths),
+        "review_severity_bar": review_severity_bar,
         "tasks": tasks,
     }
     digest = hashlib.sha256(_canonical_json(machine)).hexdigest()
-    return ImportedPlan(goal, list(test_paths), tasks, digest)
+    return ImportedPlan(
+        goal,
+        list(test_paths),
+        review_severity_bar,
+        tasks,
+        digest,
+    )
 
 
 def _plan_task(value: Any) -> dict[str, Any]:
@@ -178,6 +192,30 @@ def _plan_task(value: Any) -> dict[str, Any]:
     test_changes = value.get("test_changes", False)
     if not isinstance(test_changes, bool):
         raise PlanError("task test_changes must be a boolean")
+    review = None
+    if value["role"] == "reviewer":
+        remediation_role = value.get("remediation_role", "implementer")
+        remediation_effort = value.get("remediation_effort", value["effort"])
+        remediation_check = value.get("remediation_check", value["check"])
+        for field, candidate in (
+            ("remediation_role", remediation_role),
+            ("remediation_effort", remediation_effort),
+            ("remediation_check", remediation_check),
+        ):
+            if not isinstance(candidate, str) or not candidate:
+                raise PlanError(f"review task {field} must be non-empty text")
+        if remediation_role != "implementer":
+            raise PlanError("review task remediation_role must be implementer")
+        review = {
+            "origin_task_id": value["id"],
+            "round": 0,
+            "remediation": {
+                "role": remediation_role,
+                "effort": remediation_effort,
+                "check": remediation_check,
+            },
+            "findings": None,
+        }
     task = {
         "schema_version": SCHEMA_VERSION,
         "id": value["id"],
@@ -193,6 +231,7 @@ def _plan_task(value: Any) -> dict[str, Any]:
         "verdict": None,
         "parked": False,
         "judgments": [],
+        "review": review,
         "evidence": [],
         "verified_head": None,
         "lineage": {

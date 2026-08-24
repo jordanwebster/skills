@@ -15,3 +15,9 @@ candidate head, and an empty artifact list. The framework routes that ambiguity;
 is never permission to select an unstated default.
 
 Do not select other work or edit the flight's task state.
+
+If the leased task's role is reviewer, do not mutate the product or create a commit.
+Return the dispatch base commit as candidate_head, an empty artifact list, and a
+review object whose findings list may be empty. Every finding has exactly id,
+severity (low, medium, high, or critical), summary, and evidence. Completing the
+review is the claim; the framework, not you, compares findings to the flight's bar.

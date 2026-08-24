@@ -33,6 +33,7 @@ class FakeAdapter:
         """Run one scripted step without invoking a model or network service."""
 
         task_id = validate_task_id(_required_text(binding, "task_id"))
+        role = _required_text(binding, "role")
         holder = _required_text(binding, "holder")
         lease_id = _required_text(binding, "lease_id")
         claim_reservation_seconds = _required_positive_number(
@@ -68,39 +69,51 @@ class FakeAdapter:
                 message = f"reported ambiguity for {task_id}: {failure_reason}\n"
                 exit_class = "ambiguity"
             else:
-                for relative_name, content in step["writes"].items():
-                    destination = _safe_product_path(product_root, relative_name)
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_text(content, encoding="utf-8")
-                _git(
-                    product_root,
-                    ["add", "--all"],
-                    timeout=timeout,
-                )
-                _git(
-                    product_root,
-                    ["commit", "--no-gpg-sign", "-m", step["commit_message"]],
-                    timeout=timeout,
-                )
-                candidate_head = _git(
-                    product_root,
-                    ["rev-parse", "HEAD"],
-                    timeout=timeout,
-                ).strip()
+                if role == "reviewer":
+                    if step["review"] is None:
+                        raise ValueError("reviewer fake step requires a review result")
+                    if step["writes"]:
+                        raise ValueError("reviewer fake step cannot mutate the product")
+                    candidate_head = _required_text(binding, "base_head")
+                else:
+                    if step["review"] is not None:
+                        raise ValueError("only reviewer fake steps may contain findings")
+                    for relative_name, content in step["writes"].items():
+                        destination = _safe_product_path(product_root, relative_name)
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        destination.write_text(content, encoding="utf-8")
+                    _git(
+                        product_root,
+                        ["add", "--all"],
+                        timeout=timeout,
+                    )
+                    _git(
+                        product_root,
+                        ["commit", "--no-gpg-sign", "-m", step["commit_message"]],
+                        timeout=timeout,
+                    )
+                    candidate_head = _git(
+                        product_root,
+                        ["rev-parse", "HEAD"],
+                        timeout=timeout,
+                    ).strip()
                 if step["pause_seconds"]:
                     time.sleep(step["pause_seconds"])
                 evidence_source = result_root / "claim-source.json"
+                claim = {
+                    "schema_version": SCHEMA_VERSION,
+                    "task_id": task_id,
+                    "holder": holder,
+                    "lease_id": lease_id,
+                    "claim": "passes",
+                    "candidate_head": candidate_head,
+                    "artifacts": step["artifacts"],
+                }
+                if step["review"] is not None:
+                    claim["review"] = step["review"]
                 evidence_source.write_text(
                     json.dumps(
-                        {
-                            "schema_version": SCHEMA_VERSION,
-                            "task_id": task_id,
-                            "holder": holder,
-                            "lease_id": lease_id,
-                            "claim": "passes",
-                            "candidate_head": candidate_head,
-                            "artifacts": step["artifacts"],
-                        },
+                        claim,
                         ensure_ascii=False,
                         sort_keys=True,
                     )
@@ -160,11 +173,11 @@ def _normalize_step(value: Any) -> dict[str, Any]:
     writes = value.get("writes", {})
     if not isinstance(writes, dict):
         raise ValueError("fake step writes must be an object")
-    if outcome == "passes" and (
-        not isinstance(commit_message, str)
-        or not commit_message
-        or not isinstance(writes, dict)
-        or not writes
+    review = value.get("review")
+    if review is not None and not isinstance(review, dict):
+        raise ValueError("fake review result must be an object")
+    if outcome == "passes" and review is None and (
+        not isinstance(commit_message, str) or not commit_message or not writes
     ):
         raise ValueError(
             f"passing fake step {task_id} requires a commit message and writes"
@@ -203,6 +216,7 @@ def _normalize_step(value: Any) -> dict[str, Any]:
         "artifacts": list(artifacts),
         "pause_seconds": float(pause_seconds),
         "reason": reason,
+        "review": review,
     }
 
 

@@ -91,7 +91,10 @@ def run_loop(
     segment = 0
     while True:
         state = store.load()
-        if state["tasks"] and all(
+        open_escalations = [
+            item for item in state["outbox"] if item["status"] == "open"
+        ]
+        if not open_escalations and state["tasks"] and all(
             task["completion"] == "complete" and task["verdict"] == "green"
             for task in state["tasks"]
         ):
@@ -112,9 +115,6 @@ def run_loop(
                     tuple(completed),
                     f"frontier has no task for profile {profile}",
                 )
-            open_escalations = [
-                item for item in state["outbox"] if item["status"] == "open"
-            ]
             if open_escalations:
                 return RunResult(
                     "awaiting-operator",
@@ -185,7 +185,7 @@ def run_loop(
                     lease_seconds + (2 * verification_timeout)
                 ),
             },
-            "workspace-write",
+            "read-only" if task["role"] == "reviewer" else "workspace-write",
             dispatch_timeout,
         )
         active_binding = result.binding_label or binding_label

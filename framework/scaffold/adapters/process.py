@@ -32,6 +32,29 @@ CLAIM_SCHEMA: dict[str, Any] = {
             "items": {"type": "string", "minLength": 1},
         },
         "reason": {"type": ["string", "null"]},
+        "review": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "findings": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "id": {"type": "string", "minLength": 1},
+                            "severity": {
+                                "enum": ["low", "medium", "high", "critical"]
+                            },
+                            "summary": {"type": "string", "minLength": 1},
+                            "evidence": {"type": "string", "minLength": 1},
+                        },
+                        "required": ["id", "severity", "summary", "evidence"],
+                    },
+                }
+            },
+            "required": ["findings"],
+        },
     },
     "required": ["claim", "candidate_head", "artifacts", "reason"],
 }
@@ -81,11 +104,13 @@ class ProcessAdapter(ABC):
         sandbox: str,
         timeout: float,
     ) -> DispatchResult:
-        if sandbox != "workspace-write":
-            raise ValueError("real adapters require the workspace-write sandbox")
         if timeout <= 0:
             raise ValueError("dispatch timeout must be positive")
         task_id = validate_task_id(_required_text(binding, "task_id"))
+        role = _required_text(binding, "role")
+        expected_sandbox = "read-only" if role == "reviewer" else "workspace-write"
+        if sandbox != expected_sandbox:
+            raise ValueError(f"{role} tasks require the {expected_sandbox} sandbox")
         holder = _required_text(binding, "holder")
         lease_id = _required_text(binding, "lease_id")
         product_root = Path(_required_text(binding, "product_root")).resolve()
@@ -138,6 +163,7 @@ class ProcessAdapter(ABC):
                     checkout=checkout,
                     schema_path=schema_path,
                     raw_last_path=raw_last_path,
+                    sandbox=sandbox,
                 )
                 transcript["command"] = command
                 return_code, timed_out = _run_process(
@@ -180,7 +206,10 @@ class ProcessAdapter(ABC):
                         stdout=stdout,
                         raw_last_path=raw_last_path,
                     )
-                    normalized = _normalize_claim(claim)
+                    normalized = _normalize_claim(
+                        claim,
+                        require_review=role == "reviewer",
+                    )
                     if normalized["claim"] == "ambiguity":
                         failure_reason = _redact(
                             normalized["reason"], parent_environment
@@ -196,6 +225,8 @@ class ProcessAdapter(ABC):
                             raise ValueError("structured claim does not name checkout HEAD")
                         if _git(checkout, ("status", "--porcelain"), timeout=timeout).strip():
                             raise ValueError("worker checkout is dirty after claimed commit")
+                        if role == "reviewer" and candidate_head != base_head:
+                            raise ValueError("reviewer cannot publish a product commit")
                         _reject_candidate_secrets(
                             checkout,
                             base_head,
@@ -223,6 +254,10 @@ class ProcessAdapter(ABC):
                                 for item in normalized["artifacts"]
                             ],
                         }
+                        if normalized.get("review") is not None:
+                            safe_claim["review"] = _redact_value(
+                                normalized["review"], parent_environment
+                            )
                         claim_path = result_root / "claim-source.json"
                         claim_path.write_text(
                             json.dumps(safe_claim, ensure_ascii=False, sort_keys=True) + "\n",
@@ -285,6 +320,7 @@ class ProcessAdapter(ABC):
         checkout: Path,
         schema_path: Path,
         raw_last_path: Path,
+        sandbox: str,
     ) -> list[str]:
         """Return the complete vendor invocation for one isolated checkout."""
 
@@ -449,18 +485,27 @@ def _reject_candidate_secrets(
             raise ValueError(f"candidate contains a sensitive value in {location}")
 
 
-def _normalize_claim(value: Mapping[str, Any]) -> dict[str, Any]:
+def _normalize_claim(
+    value: Mapping[str, Any], *, require_review: bool = False
+) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("structured claim must be an object")
-    if set(value) != {"claim", "candidate_head", "artifacts", "reason"}:
+    if set(value) not in (
+        {"claim", "candidate_head", "artifacts", "reason"},
+        {"claim", "candidate_head", "artifacts", "reason", "review"},
+    ):
         raise ValueError("structured claim has unexpected fields")
     if value["claim"] == "ambiguity":
         reason = value["reason"]
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("structured ambiguity reason must be non-empty text")
-        if value["candidate_head"] is not None or value["artifacts"] != []:
+        if (
+            value["candidate_head"] is not None
+            or value["artifacts"] != []
+            or value.get("review") is not None
+        ):
             raise ValueError(
-                "structured ambiguity cannot name a candidate or artifacts"
+                "structured ambiguity cannot name a candidate, artifacts, or findings"
             )
         return {"claim": "ambiguity", "reason": reason}
     if value["claim"] != "passes":
@@ -485,12 +530,49 @@ def _normalize_claim(value: Mapping[str, Any]) -> dict[str, Any]:
             or any(part.casefold() == ".scaffolding" for part in path.parts)
         ):
             raise ValueError("structured claim artifacts must be safe relative paths")
-    return {
+    review = value.get("review")
+    if require_review and review is None:
+        raise ValueError("reviewer structured claim must contain findings")
+    if not require_review and review is not None:
+        raise ValueError("only reviewer structured claims may contain findings")
+    normalized = {
         "claim": "passes",
         "candidate_head": candidate_head,
         "artifacts": list(artifacts),
         "reason": None,
     }
+    if review is not None:
+        normalized["review"] = _normalize_review(review)
+    return normalized
+
+
+def _normalize_review(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {"findings"}:
+        raise ValueError("structured review must contain only findings")
+    findings = value["findings"]
+    if not isinstance(findings, list):
+        raise ValueError("structured review findings must be a list")
+    normalized: list[dict[str, str]] = []
+    ids: set[str] = set()
+    for finding in findings:
+        if not isinstance(finding, dict) or set(finding) != {
+            "id",
+            "severity",
+            "summary",
+            "evidence",
+        }:
+            raise ValueError("structured review finding has the wrong fields")
+        finding_id = validate_task_id(finding["id"])
+        if finding_id in ids:
+            raise ValueError("structured review finding ids must be unique")
+        if finding["severity"] not in {"low", "medium", "high", "critical"}:
+            raise ValueError("structured review severity is outside the closed enum")
+        for field in ("summary", "evidence"):
+            if not isinstance(finding[field], str) or not finding[field]:
+                raise ValueError(f"structured review {field} must be non-empty text")
+        ids.add(finding_id)
+        normalized.append(dict(finding))
+    return {"findings": normalized}
 
 
 def _git(root: Path, arguments: Sequence[str], *, timeout: float) -> str:

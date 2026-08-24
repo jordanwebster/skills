@@ -25,6 +25,7 @@ CLOSED_TRIGGERS = frozenset(
         "stall",
         "identical-error",
         "wall-clock-cap",
+        "review-findings",
     }
 )
 

@@ -20,5 +20,5 @@ if ! goal_output=$(timeout 120 env PYTHONPATH="$framework_root" \
     exit 1
 fi
 
-echo "build incomplete: M5 review routing is not implemented"
+echo "build incomplete: M5 proposal folding is not implemented"
 exit 1
