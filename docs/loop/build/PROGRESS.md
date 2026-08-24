@@ -12,7 +12,7 @@ next iteration trusts this file over anything else.
       Check: the toy flight runs green end-to-end unattended; retained-plan
       publication is crash-durable across fresh-directory creation and identical
       retries.
-- [x] M2 — Verification runner: test-glob diff-gate, verdict enum,
+- [ ] M2 — Verification runner: test-glob diff-gate, verdict enum,
       malformed-reddens-task, artifact-based judgment. Check: seeded lying-worker
       and bad-paperwork tests pass; toy flight stays green.
 - [ ] M3 — Supervision: heartbeat, flock, pgid kill, drain; start survives the
@@ -90,7 +90,8 @@ next iteration trusts this file over anything else.
   injected fsync ordering rather than a real power-loss/filesystem recovery test.
   The whole-build check now honestly exits 1 with `build incomplete: M2
   seeded-failure suite is not implemented`.
-- 2026-08-24 — M2 completed in `3cc295a` (`Implement M2 verification runner`).
+- 2026-08-24 — M2 advanced in `3cc295a` (`Implement M2 verification runner`) and
+  `02f481d` (`Close M2 verification lifecycle gaps`).
   The loop now captures the pre-dispatch product head, restores each claimed
   descendant commit in a detached local clone, fingerprints plan-declared test and
   check paths at both commits, and applies only a digest-bound framework verdict
@@ -101,21 +102,31 @@ next iteration trusts this file over anything else.
   infra and killed verification end the slice without burning the work-attempt count,
   while malformed machinery stops the line. Forty-one stdlib framework tests and the
   full repository suite pass, including the seeded lying-worker, bad-paperwork, and
-  protected-edit cases. The whole-build check honestly exits 1 with `build incomplete:
-  M3 supervision is not implemented`.
+  protected-edit cases. Independent review found four medium boundary defects: mode-
+  only protected edits, surviving verifier descendants, non-durable verdict-directory
+  ancestors, and checks outliving their lease. `02f481d` fixed all four and added
+  restoration of non-green candidates; forty-five framework tests and the full suite
+  pass. The one bounded re-check confirmed those fixes but found one remaining medium
+  lifecycle race: another loop can reclaim the lease after a claim is filed but before
+  renewal; the stale loop then cannot safely restore its unverified candidate without
+  risking the new holder's work. Per Handoff's stop bar, no second automatic fix loop
+  was taken, so M2 remains in progress. Both reviews used fresh read-only
+  `gpt-5.6-sol` contexts at xhigh effort because the roster-selected Claude CLI is
+  unauthenticated, reducing model-family diversity. The whole-build check honestly
+  exits 1 with `build incomplete: M2 lease-reclaim cleanup is not implemented`.
 
 ## Next
 
-- Build M3 only: add framework-owned foreground/supervised lifetime with heartbeat
-  files, an independently held run lock, process-group stop, and boundary drain.
-- Seed stillborn launch and stale-liveness failures, then prove killing the driver
-  mid-task and relaunching resumes from durable store/claim/verdict state without a
-  second writer or duplicate green transition.
-- Preserve M2's artifact protocol and use the retained verification durations when
-  supervision resumes a check; a supervisor must never infer liveness from a pid
-  alone.
-- Keep `check.sh` non-zero after M3 because real adapters and M5 seeded failures will
-  remain absent; change its one-line reason only to the first genuine unfinished
-  whole-build requirement.
+- Finish M2 only: remove the reclaim window between a worker filing its claim and the
+  framework reserving that same lease through verification. The state transition must
+  be atomic enough that a stale holder never resets a new holder's work and no later
+  task can inherit an unverified candidate.
+- Add the exact seeded race from the bounded re-check: expire and reclaim the lease
+  after claim filing but before reservation, then prove ownership and product `HEAD`
+  have one safe outcome rather than `broken` with candidate bytes installed.
+- Re-run every M2 failure seed and the fresh-checkout toy flight. Do not start M3 until
+  an independent check finds no medium-or-higher M2 defect.
+- Keep `check.sh` non-zero until that race is closed; then advance its one-line reason
+  to the first genuine M3 requirement.
 - Imports currently use `PYTHONPATH=framework`; installation and the stable executable
   surface remain future milestone work.

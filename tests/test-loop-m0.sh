@@ -15,9 +15,9 @@ fi
 
 output=$(cat "$output_file")
 assert_eq \
-    "build incomplete: M3 supervision is not implemented" \
+    "build incomplete: M2 lease-reclaim cleanup is not implemented" \
     "$output" \
-    "the whole-build check should name the first unfinished M3 gap"
+    "the whole-build check should name the remaining M2 gap"
 
 goal_output=$(timeout 120 env PYTHONPATH="$repo_root/framework" \
     python3 "$repo_root/framework/tests/toy_flight_goal.py")
