@@ -15,7 +15,7 @@ next iteration trusts this file over anything else.
 - [x] M2 — Verification runner: test-glob diff-gate, verdict enum,
       malformed-reddens-task, artifact-based judgment. Check: seeded lying-worker
       and bad-paperwork tests pass; toy flight stays green.
-- [ ] M3 — Supervision: heartbeat, flock, pgid kill, drain; start survives the
+- [x] M3 — Supervision: heartbeat, flock, pgid kill, drain; start survives the
       initiating shell ending and machine sleep. Check: kill mid-run → relaunch
       resumes; stillborn-launch and stale-pid seeded tests pass.
 - [ ] M4 — Real adapters: claude + codex dispatch, sandboxing, transcripts,
@@ -132,17 +132,32 @@ next iteration trusts this file over anything else.
   remained unauthenticated, so both checks lack cross-family diversity. The whole-
   build check honestly exits 1 with `build incomplete: M3 supervision is not
   implemented`.
+- 2026-08-24 — M3 completed in `6d098bf` (`Implement M3 supervised process
+  lifetime`). Foreground and detached runs now share one OS-released nonblocking
+  driver lock; detached launch survives its caller and requires a matching heartbeat
+  handshake, while status derives liveness only from the heartbeat rather than a PID
+  probe. `drain` is bound to the current run and stops at a task boundary; `stop`
+  requires the locked owner and heartbeat to agree before signaling the full driver
+  process group. A durable pre-dispatch receipt lets restart keep an already-verified
+  head or restore the exact clean base, release the interrupted lease as infrastructure,
+  and continue immediately. Seeded tests cover a refused second writer, stillborn
+  launch, stale-pid/heartbeat classification, descendant process-group termination,
+  detached-shell survival, boundary drain/resume, and kill-after-candidate/relaunch.
+  Fifty-four stdlib framework tests, the supervised fresh toy flight, and the full
+  repository suite pass. The whole-build check honestly exits 1 with `build
+  incomplete: M4 real adapters are not implemented`.
 
 ## Next
 
-- Start M3 only: add framework-owned foreground/supervised process lifetime with a
-  heartbeat file, one-driver `flock`, process-group stop, and graceful drain.
-- Seed stillborn launch and stale-pid/heartbeat failures, then prove killing the driver
-  mid-run and relaunching resumes without corrupting store state or inheriting an
-  unverified product candidate.
-- Make `start` survive the initiating shell ending and document/test safe pause and
-  resume across machine sleep without using `ps` as the liveness oracle.
-- Keep `check.sh` non-zero until all M3 checks pass; its current reason is the first
-  genuine M3 gap.
+- Start M4 only: implement the Claude and Codex adapters behind the existing
+  vendor-neutral dispatch contract, including sandbox flags, structured output,
+  transcripts, and retained-log secret filtering.
+- Resolve bindings mechanically from the delegate roster without allowing vendor
+  knowledge to escape `framework/scaffold/adapters/`.
+- Run the toy flight through each real CLI. If local authentication is unavailable,
+  implement and fixture-test the complete command/result boundary and record the
+  live-auth gap in `QUESTIONS.md` as the brief directs.
+- Keep `check.sh` non-zero until all M4 checks pass; its current reason is the first
+  genuine M4 gap.
 - Imports currently use `PYTHONPATH=framework`; installation and the stable executable
   surface remain future milestone work.
