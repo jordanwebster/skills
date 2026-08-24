@@ -28,8 +28,8 @@ next iteration trusts this file over anything else.
       above-bar findings spawns remediation and one re-review, then escalates;
       final demonstrations re-captured at the presented commit; bless
       round-trips. Typed judgment, retry-cap/ambiguity routing, the durable
-      outbox, and bounded review routing are complete; proposal folding,
-      demonstration freshness, and bless remain.
+      outbox, bounded review routing, and proposal folding are complete;
+      demonstration freshness and bless remain.
 
 ## Iteration log
 
@@ -244,22 +244,41 @@ next iteration trusts this file over anything else.
   xhigh default because the no-network brief precluded the roster's cross-family
   Claude transport. The whole-build check advances monotonically and exits 1 with
   `build incomplete: M5 proposal folding is not implemented`.
+- 2026-08-25 — M5 proposal folding advanced in `238e258` (`Implement M5
+  proposal folding`). Verified worker claims can now carry schema-validated
+  proposed work without opening a second control-state path from the disposable
+  worker checkout. At an empty-frontier or split/rebrief/rebind judgment batch
+  point, a fresh roster-backed read-only planner must return an exact digest-bound
+  routing for every pending proposal. In-envelope routes atomically add checked
+  graph tasks; judgment replacements supersede their parked source and rewire
+  direct successors; beyond-flight routes become inert local follow-ups under the
+  build's no-standing-write-authority default; envelope-breaking routes create the
+  fixed-shape operator question while independent work remains runnable. Missing,
+  stale, partial, or malformed planning output parks the retained batch once and
+  escalates instead of stopping the line or losing the inputs. Seeded cases cover
+  all three dispositions, empty-frontier batching, malformed restart behavior,
+  judgment replacement, and both local Codex and Claude CLI planner contracts.
+  Eighty-nine stdlib framework tests, the fresh toy flight, and the full repository
+  suite pass. The whole-build check advances monotonically and exits 1 with `build
+  incomplete: M5 demonstration freshness and bless are not implemented`.
 
 ## Next
 
-- Continue M5 only: implement proposal folding at judge or empty-frontier batch
-  points. Route in-envelope proposals into the graph from a fresh planning context,
-  route beyond-flight work to the authorized tasks seam or the local follow-up list,
-  and escalate envelope-breaking work. Add the seeded proposed-task-folding case
-  before moving `check.sh` forward again.
-- Treat the judgment records for `split`, `rebrief`, and `rebind` as parked planning
-  inputs during proposal folding; workers and judges still never mutate the graph.
+- Continue M5 only: implement demonstration freshness. Candidate demonstrations must
+  be tagged with the `verified_head` they depict, invalidated when their surface
+  changes, and replayed or regenerated at the exact presented commit before the
+  done-pending-bless ask. Add the seeded freshness and stale-capture cases before
+  moving `check.sh` forward again.
+- After demonstration freshness, implement bless round-tripping and candidate-golden
+  graduation; neither is implemented by this chunk.
+- Preserve digest-bound proposal batches, claim-carried proposal filing, local inert
+  follow-ups under absent tasks authority, exact typed routing, replacement-task
+  successor rewiring, and fail-safe planner escalation. Workers, judges, and external
+  task storage still never mutate the graph.
 - Preserve review completion independently from findings, read-only reviewer claims,
   the inclusive plan-time severity bar, atomic finding/graph routing, planned-
   successor rewiring, plan-owned remediation test scope, and the single re-review
   limit.
-- After proposal folding, finish demonstration freshness and bless round-tripping;
-  neither is implemented by the review-routing chunk.
 - Preserve the atomic parked-task/outbox transition, the pre-dispatch retry-cap
   check, ambiguity's diagnostic accounting, real-adapter ambiguity redaction, and
   the roster-backed read-only judge's concrete redacted failure input.
