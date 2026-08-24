@@ -51,7 +51,7 @@ next iteration trusts this file over anything else.
   `run` CLI slice. The fresh-repository toy flight now lands two dependency-ordered
   product commits and wraps green through the CLI. Twenty-six stdlib unit tests and the
   full repository suite pass. Independent review found six boundary defects;
-  `53a0e1b` fixed all six named cases, but the one allowed
+  `53a0e1b` addressed all six named cases, but the one allowed
   re-check showed that the plan-source fix was incomplete: changing only readable HTML
   prose preserves the canonical machine digest and overwrites the active retained plan
   before the second import is rejected. Per Handoff's bounded review rule, no second
