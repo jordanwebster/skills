@@ -27,7 +27,9 @@ next iteration trusts this file over anything else.
       ambiguity scenarios produce the right records; a completed review with
       above-bar findings spawns remediation and one re-review, then escalates;
       final demonstrations re-captured at the presented commit; bless
-      round-trips.
+      round-trips. Typed judgment, retry-cap/ambiguity routing, and the durable
+      outbox are complete; review routing, demonstration freshness, and bless
+      remain.
 
 ## Iteration log
 
@@ -196,15 +198,34 @@ next iteration trusts this file over anything else.
   brief's no-network constraint, as recorded in QUESTIONS.md. The whole-build
   check advances monotonically and exits 1 with `build incomplete: M5 judge,
   outbox, and bless are not implemented`.
+- 2026-08-25 — M5 judgment and outbox routing advanced in `1a51900`
+  (`Implement M5 judgment and escalation routing`). Judge outputs now use a
+  closed, task-and-trigger-bound decision contract. A task that reaches the
+  three-work-attempt cap is judged before any further dispatch, including after
+  a crash between failure accounting and judgment; malformed or unavailable
+  judge output parks and escalates instead of stopping the line. Ambiguity is a
+  typed worker outcome that records a diagnostic attempt and follows the fixed
+  straight-to-operator rule without retry. Parking, the judgment, and any
+  fixed-shape operator question land atomically in the canonical state and
+  journal, while independent frontier work remains runnable. The real-adapter
+  structured-output contract accepts ambiguity without publishing a candidate
+  and redacts its reason before durable retention. Seventy-four stdlib framework
+  tests and the full repository suite pass. The whole-build check advances
+  monotonically and exits 1 with `build incomplete: M5 review routing is not
+  implemented`.
 
 ## Next
 
-- Start M5 only: implement typed judge decisions and durable escalation/outbox
-  records, then add retry-cap and ambiguity seeds before proceeding to review
-  routing or bless.
-- Keep graph mutation in planning contexts at batch points; workers may only file
-  proposals, and malformed judge output must park and escalate rather than stop the
-  line.
+- Continue M5 only: implement completed-review finding adjudication against the
+  plan-time severity bar, remediation task creation, exactly one re-review, and
+  escalation for findings still above the bar. Add the milestone's seeded routing
+  scenario before moving `check.sh` forward again.
+- Keep graph mutation in planning contexts at batch points. The judgment records for
+  `split`, `rebrief`, and `rebind` are deliberately parked inputs; a later proposal-
+  folding chunk must route them rather than letting workers or judges mutate the
+  graph directly.
+- Preserve the atomic parked-task/outbox transition, the pre-dispatch retry-cap
+  check, ambiguity's diagnostic accounting, and real-adapter ambiguity redaction.
 - Preserve the authenticated real-flight proof gap unless a later iteration has
   explicit network authority; do not weaken the M4 fixture coverage around it or
   reopen the green milestone for a review finding.
