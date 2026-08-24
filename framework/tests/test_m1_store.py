@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scaffold.plan import PlanError, import_plan, read_plan, retained_plan_path
 from scaffold.store import (
@@ -130,6 +131,41 @@ class PlanAndFrontierTests(unittest.TestCase):
         unchanged_stat = active_path.stat()
         self.assertEqual(active_stat.st_ino, unchanged_stat.st_ino)
         self.assertEqual(active_stat.st_mtime_ns, unchanged_stat.st_mtime_ns)
+
+    def test_plan_import_retains_the_same_source_snapshot_it_parses(self) -> None:
+        plan_path = write_plan(self.root / "plan.html", [task("first")])
+        parsed_source = plan_path.read_bytes()
+        later_source = parsed_source.replace(
+            b"<h1>Readable plan</h1>",
+            b"<h1>Changed readable plan</h1>",
+        )
+        original_read_text = Path.read_text
+
+        def mutate_source_after_text_read(
+            path: Path, *args: object, **kwargs: object
+        ) -> str:
+            source = original_read_text(path, *args, **kwargs)
+            if path == plan_path:
+                path.write_bytes(later_source)
+            return source
+
+        with patch.object(
+            Path,
+            "read_text",
+            autospec=True,
+            side_effect=mutate_source_after_text_read,
+        ):
+            import_plan(self.store, plan_path)
+
+        self.assertEqual(parsed_source, retained_plan_path(self.store).read_bytes())
+
+    def test_new_retained_plan_fsyncs_its_directory_entry(self) -> None:
+        plan_path = write_plan(self.root / "plan.html", [task("first")])
+
+        with patch("scaffold.plan._fsync_directory") as fsync_directory:
+            import_plan(self.store, plan_path)
+
+        fsync_directory.assert_called_once_with(retained_plan_path(self.store).parent)
 
     def test_task_id_cannot_escape_workspace_paths(self) -> None:
         plan = write_plan(self.root / "traversal.html", [task("../escape")])

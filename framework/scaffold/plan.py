@@ -70,12 +70,23 @@ def read_plan(path: str | Path) -> ImportedPlan:
     """Read exactly one canonical JSON block, ignoring all surrounding prose."""
 
     plan_path = Path(path)
+    return _parse_plan_source(plan_path, _read_plan_source(plan_path))
+
+
+def _read_plan_source(path: Path) -> bytes:
+    try:
+        return path.read_bytes()
+    except OSError as error:
+        raise PlanError(f"cannot read plan {path}: {error}") from error
+
+
+def _parse_plan_source(plan_path: Path, source: bytes) -> ImportedPlan:
     parser = _PlanBlockParser()
     try:
-        parser.feed(plan_path.read_text(encoding="utf-8"))
+        parser.feed(source.decode("utf-8"))
         parser.close()
-    except OSError as error:
-        raise PlanError(f"cannot read plan {plan_path}: {error}") from error
+    except UnicodeDecodeError as error:
+        raise PlanError(f"plan {plan_path} is not valid UTF-8") from error
     if parser._capturing:
         raise PlanError(f"unterminated #{PLAN_BLOCK_ID} block")
     if len(parser.blocks) != 1:
@@ -94,9 +105,10 @@ def import_plan(store: Store, path: str | Path) -> ImportedPlan:
     """Apply a plan to an initialized empty store and retain its source."""
 
     plan_path = Path(path)
-    plan = read_plan(plan_path)
+    source = _read_plan_source(plan_path)
+    plan = _parse_plan_source(plan_path, source)
     destination = retained_plan_path(store, plan.digest)
-    _atomic_write_once_bytes(destination, plan_path.read_bytes())
+    _atomic_write_once_bytes(destination, source)
     store.apply(
         {
             "type": "plan-imported",
@@ -217,5 +229,15 @@ def _atomic_write_once_bytes(path: Path, payload: bytes) -> None:
                 raise PlanError(
                     f"retained plan {path.name} already exists with different bytes"
                 )
+        else:
+            _fsync_directory(path.parent)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
