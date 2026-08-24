@@ -18,10 +18,11 @@ next iteration trusts this file over anything else.
 - [x] M3 — Supervision: heartbeat, flock, pgid kill, drain; start survives the
       initiating shell ending and machine sleep. Check: kill mid-run → relaunch
       resumes; stillborn-launch and stale-pid seeded tests pass.
-- [ ] M4 — Real adapters: claude + codex dispatch, sandboxing, transcripts,
+- [x] M4 — Real adapters: claude + codex dispatch, sandboxing, transcripts,
       secrets hygiene. Check: toy flight green with each real CLI as worker.
-      (If CLI auth is unavailable in this environment, implement fully, test
-      against recorded fixtures, and note the gap in QUESTIONS.md.)
+      The no-network build environment uses executable local CLI fixtures for
+      both vendor contracts; the authenticated-flight proof gap is recorded in
+      QUESTIONS.md.
 - [ ] M5 — Judge, outbox, review routing, bless. Check: induced retry-cap and
       ambiguity scenarios produce the right records; a completed review with
       above-bar findings spawns remediation and one re-review, then escalates;
@@ -179,19 +180,29 @@ next iteration trusts this file over anything else.
   because this build forbids network access; the reversible fixture default and
   resulting proof gap are recorded in `QUESTIONS.md`. The whole-build check honestly
   exits 1 with `build incomplete: M4 adapter isolation is incomplete`.
+- 2026-08-24 — M4 completed in `852d7c6` (`Complete M4 adapter isolation`).
+  The process-launch boundary now replaces inherited `PWD` and `OLDPWD` with
+  the resolved disposable checkout, and both executable vendor fixtures reject
+  any source-directory disclosure. Candidate publication now scans every blob,
+  commit object, and reported path introduced by `base..candidate`, so a seeded
+  worker that commits an API key and deletes it before its clean final claim is
+  rejected without publishing the history or retaining the secret. Sixty-six
+  stdlib framework tests, both real-CLI fixture flights, the fresh toy flight,
+  and the full repository suite pass. Authenticated dispatch remains untested
+  under the brief's no-network constraint, as recorded in QUESTIONS.md. The
+  whole-build check advances monotonically and exits 1 with `build incomplete:
+  M5 judge, outbox, and bless are not implemented`.
 
 ## Next
 
-- Continue M4 only: replace inherited `PWD` and `OLDPWD` with the disposable checkout
-  and add an exact source-path disclosure seed.
-- Scan every blob and commit object introduced by `base..candidate`, including
-  intermediate history; seed a worker that commits a secret, deletes it, and claims
-  the clean final commit.
-- Re-run both real-CLI fixtures, the full regression suite, and one bounded
-  independent check after those isolation repairs.
-- Keep `check.sh` non-zero with `build incomplete: M4 adapter isolation is
-  incomplete` until the complete M4 boundary passes.
+- Start M5 only: implement typed judge decisions and durable escalation/outbox
+  records, then add retry-cap and ambiguity seeds before proceeding to review
+  routing or bless.
+- Keep graph mutation in planning contexts at batch points; workers may only file
+  proposals, and malformed judge output must park and escalate rather than stop the
+  line.
 - Preserve the authenticated real-flight proof gap unless a later iteration has
-  explicit network authority; do not weaken the fixture coverage around it.
+  explicit network authority; do not weaken the M4 fixture coverage around it or
+  reopen the green milestone for a review finding.
 - Imports currently use `PYTHONPATH=framework`; installation and the stable executable
   surface remain future milestone work.
