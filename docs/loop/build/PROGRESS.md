@@ -12,7 +12,7 @@ next iteration trusts this file over anything else.
       Check: the toy flight runs green end-to-end unattended; retained-plan
       publication is crash-durable across fresh-directory creation and identical
       retries.
-- [ ] M2 — Verification runner: test-glob diff-gate, verdict enum,
+- [x] M2 — Verification runner: test-glob diff-gate, verdict enum,
       malformed-reddens-task, artifact-based judgment. Check: seeded lying-worker
       and bad-paperwork tests pass; toy flight stays green.
 - [ ] M3 — Supervision: heartbeat, flock, pgid kill, drain; start survives the
@@ -114,19 +114,35 @@ next iteration trusts this file over anything else.
   `gpt-5.6-sol` contexts at xhigh effort because the roster-selected Claude CLI is
   unauthenticated, reducing model-family diversity. The whole-build check honestly
   exits 1 with `build incomplete: M2 lease-reclaim cleanup is not implemented`.
+- 2026-08-24 — M2 completed in `a42e7e1` (`Close M2 claim reservation race`),
+  with the bounded proof fix in `6c6e193` (`Prove M2 verification failure
+  accounting`). The initial lease now covers the bounded dispatch plus lease grace;
+  filing a typed claim durably retains it and reserves that exact generation through
+  verification in one locked journal transition, removing the reclaim window that
+  could leave a stale loop unable to clean up safely. The exact seeded race captures
+  the former expiry, attempts a second-holder reclaim immediately after claim filing,
+  and proves reclaim is refused while the original candidate reaches a green retained
+  `verified_head`. The proof fix adds loop-level `killed` and `infra` routing seeds:
+  both restore the product, release the lease, increment only the typed infra count,
+  and leave work attempts at zero. Forty-seven stdlib framework tests, the fresh toy
+  flight, and the full repository suite pass. The independent `gpt-5.6-sol` xhigh
+  review found no divergence and no code finding; it initially found the missing
+  attempt-accounting proof, and the one bounded fresh re-check confirmed the added
+  seed and its stated verifier-seam limitation. The roster-selected Claude Opus CLI
+  remained unauthenticated, so both checks lack cross-family diversity. The whole-
+  build check honestly exits 1 with `build incomplete: M3 supervision is not
+  implemented`.
 
 ## Next
 
-- Finish M2 only: remove the reclaim window between a worker filing its claim and the
-  framework reserving that same lease through verification. The state transition must
-  be atomic enough that a stale holder never resets a new holder's work and no later
-  task can inherit an unverified candidate.
-- Add the exact seeded race from the bounded re-check: expire and reclaim the lease
-  after claim filing but before reservation, then prove ownership and product `HEAD`
-  have one safe outcome rather than `broken` with candidate bytes installed.
-- Re-run every M2 failure seed and the fresh-checkout toy flight. Do not start M3 until
-  an independent check finds no medium-or-higher M2 defect.
-- Keep `check.sh` non-zero until that race is closed; then advance its one-line reason
-  to the first genuine M3 requirement.
+- Start M3 only: add framework-owned foreground/supervised process lifetime with a
+  heartbeat file, one-driver `flock`, process-group stop, and graceful drain.
+- Seed stillborn launch and stale-pid/heartbeat failures, then prove killing the driver
+  mid-run and relaunching resumes without corrupting store state or inheriting an
+  unverified product candidate.
+- Make `start` survive the initiating shell ending and document/test safe pause and
+  resume across machine sleep without using `ps` as the liveness oracle.
+- Keep `check.sh` non-zero until all M3 checks pass; its current reason is the first
+  genuine M3 gap.
 - Imports currently use `PYTHONPATH=framework`; installation and the stable executable
   surface remain future milestone work.
