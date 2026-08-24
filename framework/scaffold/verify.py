@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import tempfile
 import time
@@ -82,7 +83,8 @@ def verify(
     product = Path(product_root).resolve()
     store = Path(store_root).resolve()
     run_root = store / "verifications" / task_id / lease_id
-    run_root.mkdir(parents=True, exist_ok=True)
+    store.mkdir(parents=True, exist_ok=True)
+    _ensure_durable_descendant(store, run_root)
     check_id = hashlib.sha256(check_command.encode("utf-8")).hexdigest()
     common = {
         "schema_version": SCHEMA_VERSION,
@@ -216,28 +218,23 @@ def verify(
                 }
             )
             started = clock()
-            try:
-                completed = subprocess.run(
-                    check_command,
-                    cwd=checkout,
-                    shell=True,
-                    executable="/bin/sh",
-                    check=False,
-                    capture_output=True,
-                    env=environment,
-                    timeout=timeout,
-                )
-            except subprocess.TimeoutExpired as error:
-                duration = max(0.0, clock() - started)
-                _atomic_write_bytes(stdout_path, _as_bytes(error.stdout))
-                _atomic_write_bytes(stderr_path, _as_bytes(error.stderr))
+            completed = _execute_check(
+                check_command,
+                checkout,
+                environment,
+                timeout,
+            )
+            duration = max(0.0, clock() - started)
+            _atomic_write_bytes(stdout_path, completed.stdout)
+            _atomic_write_bytes(stderr_path, completed.stderr)
+            if completed.timed_out:
                 return _finish(
                     run_root,
                     store,
                     {
                         **context,
                         "process": {
-                            "returncode": None,
+                            "returncode": completed.returncode,
                             "duration_seconds": duration,
                             "timed_out": True,
                         },
@@ -247,9 +244,6 @@ def verify(
                     f"verification exceeded its {timeout:g}-second timeout",
                     (stdout_path, stderr_path),
                 )
-            duration = max(0.0, clock() - started)
-            _atomic_write_bytes(stdout_path, completed.stdout)
-            _atomic_write_bytes(stderr_path, completed.stderr)
             process = {
                 "returncode": completed.returncode,
                 "duration_seconds": duration,
@@ -398,18 +392,24 @@ def _read_check_result(path: Path, candidate_head: str, check_id: str) -> dict[s
 def _protected_hashes(
     root: Path, commit: str, patterns: Sequence[str]
 ) -> dict[str, str]:
-    raw = _git_bytes(root, "ls-tree", "-r", "--name-only", "-z", commit)
-    paths = [
-        item.decode("utf-8", errors="surrogateescape")
-        for item in raw.split(b"\0")
-        if item
-    ]
+    raw = _git_bytes(root, "ls-tree", "-r", "-z", commit)
     protected: dict[str, str] = {}
-    for path in paths:
+    for item in raw.split(b"\0"):
+        if not item:
+            continue
+        try:
+            metadata, raw_path = item.split(b"\t", 1)
+            mode, object_type, object_id = metadata.split(b" ", 2)
+        except ValueError as error:
+            raise RuntimeError("git ls-tree returned malformed output") from error
+        path = raw_path.decode("utf-8", errors="surrogateescape")
         if not any(_matches(path, pattern) for pattern in patterns):
             continue
-        payload = _git_bytes(root, "show", f"{commit}:{path}")
-        protected[path] = hashlib.sha256(payload).hexdigest()
+        if object_type == b"blob":
+            payload = _git_bytes(root, "cat-file", "blob", object_id.decode("ascii"))
+        else:
+            payload = object_id
+        protected[path] = hashlib.sha256(mode + b"\0" + payload).hexdigest()
     return protected
 
 
@@ -470,10 +470,56 @@ def _safe_component(value: str, field: str) -> str:
     return value
 
 
-def _as_bytes(value: bytes | str | None) -> bytes:
-    if value is None:
-        return b""
-    return value if isinstance(value, bytes) else value.encode("utf-8")
+@dataclass(frozen=True)
+class _CheckProcessResult:
+    returncode: int
+    stdout: bytes
+    stderr: bytes
+    timed_out: bool
+
+
+def _execute_check(
+    command: str,
+    checkout: Path,
+    environment: Mapping[str, str],
+    timeout: float,
+) -> _CheckProcessResult:
+    process = subprocess.Popen(
+        command,
+        cwd=checkout,
+        shell=True,
+        executable="/bin/sh",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=dict(environment),
+        start_new_session=True,
+    )
+    timed_out = False
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _signal_process_group(process.pid, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=1)
+        except subprocess.TimeoutExpired:
+            _signal_process_group(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate(timeout=5)
+    finally:
+        _signal_process_group(process.pid, signal.SIGKILL)
+    return _CheckProcessResult(
+        process.returncode,
+        stdout or b"",
+        stderr or b"",
+        timed_out,
+    )
+
+
+def _signal_process_group(process_group: int, signal_number: int) -> None:
+    try:
+        os.killpg(process_group, signal_number)
+    except ProcessLookupError:
+        pass
 
 
 def _canonical_json(value: Mapping[str, Any]) -> bytes:
@@ -499,11 +545,36 @@ def _atomic_write_bytes(path: Path, payload: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary_path, path)
-        directory = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
+        _fsync_directory(path.parent)
     except BaseException:
         temporary_path.unlink(missing_ok=True)
         raise
+
+
+def _ensure_durable_descendant(root: Path, directory: Path) -> None:
+    try:
+        relative = directory.relative_to(root)
+    except ValueError as error:
+        raise ValueError(f"verification directory escapes store root: {directory}") from error
+    if not root.is_dir():
+        raise ValueError(f"store root is not a directory: {root}")
+    parent = root
+    for component in relative.parts:
+        child = parent / component
+        try:
+            child.mkdir()
+        except FileExistsError:
+            if not child.is_dir():
+                raise ValueError(
+                    f"verification path parent is not a directory: {child}"
+                )
+        _fsync_directory(parent)
+        parent = child
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

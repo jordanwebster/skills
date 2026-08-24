@@ -265,6 +265,74 @@ class Store:
             _atomic_write_json(destination, normalized)
         return destination
 
+    def renew(
+        self,
+        task_id: str,
+        holder: str,
+        lease_id: str,
+        *,
+        ttl_seconds: float,
+        now: float | None = None,
+    ) -> Lease:
+        """Extend the current claimed lease before framework verification."""
+
+        task_id = validate_task_id(task_id)
+        if not isinstance(holder, str) or not holder:
+            raise ValueError("holder must be a non-empty string")
+        if not isinstance(lease_id, str) or not lease_id:
+            raise ValueError("lease_id must be a non-empty string")
+        if (
+            isinstance(ttl_seconds, bool)
+            or not isinstance(ttl_seconds, (int, float))
+            or ttl_seconds <= 0
+        ):
+            raise ValueError("ttl_seconds must be positive")
+        if now is not None and (
+            isinstance(now, bool) or not isinstance(now, (int, float))
+        ):
+            raise ValueError("now must be a number or None")
+        observed_at = time.time() if now is None else float(now)
+
+        with self._locked():
+            state = self._load_unlocked()
+            task = _task_by_id(state, task_id)
+            lease = task["lease"]
+            if (
+                task["completion"] != "pending"
+                or task["verdict"] is not None
+                or lease is None
+                or lease["holder"] != holder
+                or lease["lease_id"] != lease_id
+            ):
+                raise InvalidTransition(
+                    "renewed task is not pending under the named lease"
+                )
+            claim = self.read_claim(task_id)
+            if claim["holder"] != holder or claim["lease_id"] != lease_id:
+                raise InvalidTransition(
+                    "lease cannot be renewed without its current filed claim"
+                )
+            expires_at = observed_at + float(ttl_seconds)
+            lease["expires_at"] = expires_at
+            self._replace_unlocked(
+                state,
+                {
+                    "type": "task-lease-renewed",
+                    "task_id": task_id,
+                    "holder": holder,
+                    "lease_id": lease_id,
+                    "observed_at": observed_at,
+                    "expires_at": expires_at,
+                },
+            )
+            return Lease(
+                task_id,
+                holder,
+                lease_id,
+                lease["acquired_at"],
+                expires_at,
+            )
+
     def read_claim(self, task_id: str) -> dict[str, Any]:
         """Read a previously validated worker claim."""
 

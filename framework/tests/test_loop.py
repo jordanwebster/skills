@@ -221,6 +221,7 @@ raise SystemExit(0 if exists else 1)
         self.assertIn("result artifact", lied["evidence"][-1]["reason"])
 
     def test_malformed_result_reddens_only_its_task(self) -> None:
+        verified_base = git(self.product, "rev-parse", "HEAD").strip()
         plan = Store(self.root / "bad-paperwork-flight")
         plan.create(initial_state("Build the toy"))
         import_plan(
@@ -260,6 +261,69 @@ raise SystemExit(0 if exists else 1)
             ["independent"],
             [item["id"] for item in plan.ready("implementer")],
         )
+        self.assertEqual(verified_base, git(self.product, "rev-parse", "HEAD").strip())
+        self.assertFalse((self.product / "bad.txt").exists())
+
+        second_script = self.write_script(
+            [
+                {
+                    "task_id": "independent",
+                    "commit_message": "Build independent artifact",
+                    "writes": {"independent.txt": "independent\n"},
+                }
+            ]
+        )
+        second = run_loop(
+            plan,
+            self.product,
+            FakeAdapter(second_script, plan),
+            holder="independent-worker",
+        )
+        self.assertEqual("blocked", second.status)
+        self.assertEqual("green", plan.load()["tasks"][1]["verdict"])
+        self.assertFalse((self.product / "bad.txt").exists())
+
+    def test_verification_renews_a_short_lease(self) -> None:
+        plan = Store(self.root / "short-lease-flight")
+        plan.create(initial_state("Build the toy"))
+        import_plan(
+            plan,
+            write_plan(self.root / "short-lease-plan.html", [task("slow")]),
+        )
+        slow_check = self.product / "checks" / "check_file.py"
+        slow_check.write_text(
+            slow_check.read_text(encoding="utf-8").replace(
+                "target = Path(sys.argv[1])",
+                "import time\ntime.sleep(0.15)\ntarget = Path(sys.argv[1])",
+            ),
+            encoding="utf-8",
+        )
+        git(self.product, "add", "checks/check_file.py")
+        git(self.product, "commit", "--quiet", "-m", "Make base check deliberately slow")
+        script = self.write_script(
+            [
+                {
+                    "task_id": "slow",
+                    "commit_message": "Build slow checked artifact",
+                    "writes": {"slow.txt": "slow\n"},
+                }
+            ]
+        )
+
+        result = run_loop(
+            plan,
+            self.product,
+            FakeAdapter(script, plan),
+            holder="short-lease-worker",
+            lease_seconds=0.05,
+            dispatch_timeout=2,
+        )
+
+        self.assertEqual("complete", result.status, result.reason)
+        transitions = [
+            entry["transition"]["type"] for entry in plan.read_journal()
+        ]
+        self.assertIn("task-lease-renewed", transitions)
 
     def test_out_of_scope_check_edit_withholds_green_flip(self) -> None:
         plan = Store(self.root / "test-edit-flight")

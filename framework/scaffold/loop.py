@@ -99,6 +99,10 @@ def run_loop(
             dispatch_timeout,
         )
         if result.exit_class != "success":
+            try:
+                _restore_product(product, base_head)
+            except ValueError as error:
+                return RunResult("broken", tuple(completed), str(error))
             store.apply(
                 {
                     "type": "task-released",
@@ -123,6 +127,10 @@ def run_loop(
         try:
             claim = store.read_claim(task["id"])
         except (InvalidTransition, ValueError) as error:
+            try:
+                _restore_product(product, base_head)
+            except ValueError as restore_error:
+                return RunResult("broken", tuple(completed), str(restore_error))
             store.apply(
                 {
                     "type": "task-released",
@@ -140,6 +148,23 @@ def run_loop(
             )
             return RunResult("failed", tuple(completed), str(error))
 
+        verification_timeout = _verification_timeout(
+            state, task, dispatch_timeout
+        )
+        try:
+            store.renew(
+                task["id"],
+                holder,
+                lease.lease_id,
+                ttl_seconds=lease_seconds + (2 * verification_timeout),
+            )
+        except (InvalidTransition, ValueError) as error:
+            return RunResult(
+                "broken",
+                tuple(completed),
+                f"cannot reserve the task through verification: {error}",
+            )
+
         try:
             verdict = verify(
                 task,
@@ -150,11 +175,15 @@ def run_loop(
                 base_head=base_head,
                 candidate_head=claim["candidate_head"],
                 test_paths=state["test_paths"],
-                timeout=_verification_timeout(state, task, dispatch_timeout),
+                timeout=verification_timeout,
                 minimum_observations=_observation_floor(state, task),
                 require_clean_worktree=True,
             )
         except Exception as error:
+            try:
+                _restore_product(product, base_head)
+            except ValueError as restore_error:
+                return RunResult("broken", tuple(completed), str(restore_error))
             _event(
                 store,
                 f"segment {segment}: {task['id']} -> {binding_label}; "
@@ -167,6 +196,10 @@ def run_loop(
             )
 
         if verdict.kind in {"infra", "killed"}:
+            try:
+                _restore_product(product, base_head)
+            except ValueError as error:
+                return RunResult("broken", tuple(completed), str(error))
             store.apply(
                 {
                     "type": "task-released",
@@ -184,12 +217,22 @@ def run_loop(
             )
             return RunResult("failed", tuple(completed), verdict.reason)
         if verdict.kind == "malformed":
+            try:
+                _restore_product(product, base_head)
+            except ValueError as error:
+                return RunResult("broken", tuple(completed), str(error))
             _event(
                 store,
                 f"segment {segment}: {task['id']} -> {binding_label}; "
                 "verification machinery malformed; line stopped",
             )
             return RunResult("broken", tuple(completed), verdict.reason)
+
+        if verdict.kind == "red":
+            try:
+                _restore_product(product, base_head)
+            except ValueError as error:
+                return RunResult("broken", tuple(completed), str(error))
 
         try:
             store.apply(
@@ -280,6 +323,16 @@ def _verification_timeout(
     if not durations:
         return bootstrap
     return max(durations) * 4
+
+
+def _restore_product(product_root: Path, base_head: str) -> None:
+    _git(product_root, ["reset", "--hard", base_head])
+    _git(product_root, ["clean", "-fd"])
+    restored_head = _git(product_root, ["rev-parse", "HEAD"]).strip()
+    if restored_head != base_head or _git(
+        product_root, ["status", "--porcelain"]
+    ).strip():
+        raise ValueError("cannot restore product to its pre-dispatch commit")
 
 
 def _event(store: Store, message: str) -> None:
