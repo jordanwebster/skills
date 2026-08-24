@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -133,6 +136,59 @@ class PlanAndFrontierTests(unittest.TestCase):
         reclaimed = self.store.claim("first", "worker-b", now=111)
         self.assertEqual("worker-b", reclaimed.holder)
         self.assertTrue(self.store.read_journal()[-1]["transition"]["reclaimed"])
+
+    def test_two_processes_contending_for_the_store_get_one_lease(self) -> None:
+        self.import_tasks([task("first"), task("other")])
+        barrier = self.root / "start-workers"
+        worker = """
+import pathlib
+import sys
+import time
+from scaffold.store import Store, TaskUnavailable
+
+store_root, task_id, barrier_path = sys.argv[1:]
+barrier = pathlib.Path(barrier_path)
+while not barrier.exists():
+    time.sleep(0.001)
+try:
+    Store(store_root).claim(task_id, task_id + '-worker', ttl_seconds=30)
+except TaskUnavailable:
+    print('unavailable')
+else:
+    print('claimed')
+"""
+        environment = os.environ.copy()
+        framework_root = str(Path(__file__).parents[1])
+        environment["PYTHONPATH"] = framework_root
+        processes = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    worker,
+                    str(self.store.root),
+                    task_id,
+                    str(barrier),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=environment,
+            )
+            for task_id in ("first", "other")
+        ]
+        barrier.touch()
+        outputs = []
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(0, process.returncode, stderr)
+            outputs.append(stdout.strip())
+
+        self.assertEqual(["claimed", "unavailable"], sorted(outputs))
+        live_leases = [
+            item for item in self.store.load()["tasks"] if item["lease"] is not None
+        ]
+        self.assertEqual(1, len(live_leases))
 
     def test_typed_claim_does_not_flip_until_framework_apply(self) -> None:
         self.import_tasks([task("first"), task("second", depends_on=["first"])])
