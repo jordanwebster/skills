@@ -15,9 +15,9 @@ fi
 
 output=$(cat "$output_file")
 assert_eq \
-    "build incomplete: M2 seeded-failure suite is not implemented" \
+    "build incomplete: M1 retained plan directory hierarchy is not crash-durable" \
     "$output" \
-    "the whole-build check should name the first unfinished milestone"
+    "the whole-build check should name the first unfinished M1 gap"
 
 goal_output=$(timeout 120 env PYTHONPATH="$repo_root/framework" \
     python3 "$repo_root/framework/tests/toy_flight_goal.py")

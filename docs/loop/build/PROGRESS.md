@@ -9,8 +9,9 @@ next iteration trusts this file over anything else.
       function created and red. Check: check.sh exists, executes, and fails for
       the right reason.
 - [ ] M1 — Loop on fake adapter: selection, leasing, prompt assembly, apply.
-      The toy-flight check is green, but independent re-check found one remaining
-      medium plan-source immutability defect; M1 is not complete until it is fixed.
+      The toy-flight check is green, but final independent re-check found one
+      remaining medium retained-plan directory durability defect; M1 is not complete
+      until it is fixed.
 - [ ] M2 — Verification runner: test-glob diff-gate, verdict enum,
       malformed-reddens-task, artifact-based judgment. Check: seeded lying-worker
       and bad-paperwork tests pass; toy flight stays green.
@@ -58,15 +59,34 @@ next iteration trusts this file over anything else.
   automatic fix round was taken this iteration, so M1 remains in progress. The
   whole-build check honestly exits 1 with `build incomplete: M1 retained plan can
   change after rejected import`.
+- 2026-08-24 — M1 plan-source correction advanced in `c5e66b5` (`Make retained
+  plans immutable`) and `ba304ad` (`Harden retained plan publication`). Retained
+  digest paths are now atomic create-once files; changed prose around an identical
+  machine block cannot replace the accepted prompt source, identical bytes leave the
+  existing file untouched, and parsing plus retention use one byte snapshot. Thirty
+  stdlib framework tests and the full repository suite pass. The roster-selected
+  cross-family reviewer could not start because the local Claude CLI is unauthenticated,
+  so the reversible default and its reduced model-family diversity are recorded in
+  `QUESTIONS.md`; two fresh same-family review contexts were used in isolated
+  checkouts. The first found a two-read source race and missing leaf-directory fsync,
+  both fixed in `ba304ad`. The one bounded final re-check confirmed those source
+  immutability cases but found a remaining medium crash-durability gap: creation of
+  `inputs/plans/` does not fsync every new parent directory, and an identical-file
+  retry after a failed fsync skips the leaf-directory fsync before state can commit.
+  Per Handoff's stop bar, no second automatic fix loop was taken. The whole-build
+  check honestly exits 1 with `build incomplete: M1 retained plan directory hierarchy
+  is not crash-durable`.
 
 ## Next
 
-- Finish M1 before any M2 work: make the digest-addressed retained plan write-once.
-  If its path already exists with identical bytes, leave it untouched; if the bytes
-  differ, reject before writing. Add a regression that re-imports identical machine
-  JSON surrounded by changed prose and proves the active prompt source is unchanged.
-  Re-run the M1 proofs, restore `check.sh`'s next reason to the missing seeded-failure
-  suite, and obtain an independent check of this exact finding.
+- Finish M1 before any M2 work: make retained-plan directory publication durable from
+  a fresh workspace. Add regressions proving each newly created directory entry is
+  fsynced through the chain (`workspace` after `inputs`, `inputs` after `plans`, then
+  `plans` after the retained file link) before the store transition can commit. Inject
+  a leaf-directory fsync failure, retry the identical retained source, and prove the
+  retry fsyncs the directory before applying state. Re-run the M1 proofs, restore
+  `check.sh`'s next reason to the missing M2 seeded-failure suite, and obtain one
+  independent check focused on this exact durability boundary.
 - After M1 is complete, build M2 only: add the verification runner's
   restore-and-hash isolation, closed
   verdict artifacts, test-glob diff gating, artifact-based judgment, and the
