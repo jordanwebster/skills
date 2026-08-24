@@ -257,10 +257,11 @@ next iteration trusts this file over anything else.
   stale, partial, or malformed planning output parks the retained batch once and
   escalates instead of stopping the line or losing the inputs. Seeded cases cover
   all three dispositions, empty-frontier batching, malformed restart behavior,
-  judgment replacement, and both local Codex and Claude CLI planner contracts.
-  Eighty-nine stdlib framework tests, the fresh toy flight, and the full repository
-  suite pass. The whole-build check advances monotonically and exits 1 with `build
-  incomplete: M5 demonstration freshness and bless are not implemented`.
+  judgment replacement, and both local Codex and Claude CLI planner contracts; the
+  committed JSON boundary demonstration replays all three route outcomes. Eighty-nine
+  stdlib framework tests, the fresh toy flight, and the full repository suite pass.
+  The whole-build check advances monotonically and exits 1 with `build incomplete:
+  M5 demonstration freshness and bless are not implemented`.
 
 ## Next
 
