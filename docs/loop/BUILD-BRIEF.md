@@ -29,6 +29,8 @@ what passes its checks, revert what doesn't).
 - Update `docs/loop/build/PROGRESS.md` every iteration: milestone states, what
   landed (with commit hashes), what is next, and anything the next iteration must
   know. This file is the next iteration's memory.
+- A review finding never reopens a milestone whose check is green. Record it in
+  `PROGRESS.md` and continue; `check.sh`'s reason only ever moves forward.
 
 ## Decisions and questions
 
@@ -53,6 +55,21 @@ what passes its checks, revert what doesn't).
   the change. Never add Co-Authored-By or any AI-attribution trailer.
 - Never write credentials or secrets into files, logs, or commits.
 - Every long-running command you run goes under `timeout`.
+
+## What crash-safety means here
+
+Crash-safe means the flight resumes — not that every byte survives. The test is
+mechanical: kill the run at any point, relaunch, and it continues correctly from
+durable state. M3's check already states it.
+
+- Durability machinery is in scope only where its absence would fail that test.
+- Anything re-derivable is not a durability problem. A retained plan, an assembled
+  prompt, or a verification artifact that is missing or torn is detected and
+  re-derived, or reddens its own task — never guaranteed byte-perfect with added
+  fsync machinery.
+- Add no new fsync boundary unless a seeded kill-and-resume test fails without it.
+- Machinery already built to a stricter reading stays. Do not churn working code to
+  match this; it bounds new work only.
 
 ## Where you are
 
