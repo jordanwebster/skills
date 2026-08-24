@@ -11,9 +11,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 import time
 from typing import Any
+import uuid
 
 
 SCHEMA_VERSION = 1
@@ -45,6 +47,7 @@ class Lease:
 
     task_id: str
     holder: str
+    lease_id: str
     acquired_at: float
     expires_at: float
 
@@ -117,18 +120,6 @@ class Store:
             _atomic_write_json(self.state_path, journal_state)
         return deepcopy(journal_state)
 
-    def replace(
-        self,
-        state: Mapping[str, Any],
-        transition: Mapping[str, Any],
-    ) -> dict[str, Any]:
-        """Append one transition and atomically materialize its resulting state."""
-
-        normalized = _normalize_state(state)
-        normalized_transition = _normalize_transition(transition)
-        with self._locked():
-            return self._replace_unlocked(normalized, normalized_transition)
-
     def _replace_unlocked(
         self,
         state: Mapping[str, Any],
@@ -187,8 +178,7 @@ class Store:
     ) -> Lease:
         """Atomically lease one ready task while enforcing v1's single worker."""
 
-        if not isinstance(task_id, str) or not task_id:
-            raise ValueError("task_id must be a non-empty string")
+        task_id = validate_task_id(task_id)
         if not isinstance(holder, str) or not holder:
             raise ValueError("holder must be a non-empty string")
         if not isinstance(ttl_seconds, (int, float)) or ttl_seconds <= 0:
@@ -199,6 +189,7 @@ class Store:
             raise ValueError("now must be a number or None")
         acquired_at = time.time() if now is None else float(now)
         expires_at = acquired_at + float(ttl_seconds)
+        lease_id = uuid.uuid4().hex
 
         with self._locked():
             state = self._load_unlocked()
@@ -219,6 +210,7 @@ class Store:
 
             reclaimed = task["lease"] is not None
             task["lease"] = {
+                "lease_id": lease_id,
                 "holder": holder,
                 "acquired_at": acquired_at,
                 "expires_at": expires_at,
@@ -229,10 +221,11 @@ class Store:
                     "type": "task-leased",
                     "task_id": task_id,
                     "holder": holder,
+                    "lease_id": lease_id,
                     "reclaimed": reclaimed,
                 },
             )
-        return Lease(task_id, holder, acquired_at, expires_at)
+        return Lease(task_id, holder, lease_id, acquired_at, expires_at)
 
     def file_claim(
         self,
@@ -243,6 +236,7 @@ class Store:
     ) -> Path:
         """Validate and durably retain a worker's typed completion claim."""
 
+        task_id = validate_task_id(task_id)
         if now is not None and (
             isinstance(now, bool) or not isinstance(now, (int, float))
         ):
@@ -263,6 +257,8 @@ class Store:
             lease = task["lease"]
             if lease is None or lease["holder"] != normalized["holder"]:
                 raise InvalidTransition("claim holder does not own the task lease")
+            if lease["lease_id"] != normalized["lease_id"]:
+                raise InvalidTransition("claim does not belong to the current lease")
             if lease["expires_at"] <= observed_at:
                 raise InvalidTransition("task lease expired before the claim was filed")
             destination = self.claims_path / f"{task_id}.json"
@@ -272,6 +268,7 @@ class Store:
     def read_claim(self, task_id: str) -> dict[str, Any]:
         """Read a previously validated worker claim."""
 
+        task_id = validate_task_id(task_id)
         try:
             return _normalize_claim(
                 _read_json_object(self.claims_path / f"{task_id}.json")
@@ -308,6 +305,7 @@ class Store:
     ) -> None:
         task_id = _required_text(transition, "task_id")
         holder = _required_text(transition, "holder")
+        lease_id = _required_text(transition, "lease_id")
         verified_head = _required_text(transition, "verified_head")
         observed_at = transition.get("observed_at")
         if isinstance(observed_at, bool) or not isinstance(
@@ -318,12 +316,20 @@ class Store:
         lease = task["lease"]
         if task["completion"] != "pending" or task["verdict"] is not None:
             raise InvalidTransition(f"task is already terminal: {task_id}")
-        if lease is None or lease["holder"] != holder:
+        if (
+            lease is None
+            or lease["holder"] != holder
+            or lease["lease_id"] != lease_id
+        ):
             raise InvalidTransition("verified task is not leased by the holder")
         if lease["expires_at"] <= observed_at:
             raise InvalidTransition("task lease expired before verification")
         claim = self.read_claim(task_id)
-        if claim["holder"] != holder or claim["candidate_head"] != verified_head:
+        if (
+            claim["holder"] != holder
+            or claim["lease_id"] != lease["lease_id"]
+            or claim["candidate_head"] != verified_head
+        ):
             raise InvalidTransition("verified result does not match the filed claim")
         task["completion"] = "complete"
         task["verdict"] = "green"
@@ -332,6 +338,7 @@ class Store:
             {
                 "claim_path": str(self.claims_path / f"{task_id}.json"),
                 "artifacts": claim["artifacts"],
+                "lease_id": lease_id,
                 "verified_head": verified_head,
             }
         )
@@ -394,6 +401,7 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(state, Mapping):
         raise ValueError("state must be an object")
     normalized = deepcopy(dict(state))
+    normalized.setdefault("plan_digest", None)
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"state schema_version must be {SCHEMA_VERSION}")
     if not isinstance(normalized.get("goal"), str) or not normalized["goal"].strip():
@@ -423,6 +431,7 @@ def _normalize_task(task: Any) -> dict[str, Any]:
         raise ValueError(f"task schema_version must be {SCHEMA_VERSION}")
     for field in ("id", "title", "role", "effort", "check"):
         _required_text(normalized, field)
+    validate_task_id(normalized["id"])
     if not isinstance(normalized.get("depends_on"), list) or any(
         not isinstance(item, str) or not item for item in normalized["depends_on"]
     ):
@@ -488,11 +497,13 @@ def _normalize_task(task: Any) -> dict[str, Any]:
     lease = normalized.get("lease")
     if lease is not None:
         if not isinstance(lease, Mapping) or set(lease) != {
+            "lease_id",
             "holder",
             "acquired_at",
             "expires_at",
         }:
             raise ValueError("task lease has an invalid shape")
+        _required_text(lease, "lease_id")
         _required_text(lease, "holder")
         for field in ("acquired_at", "expires_at"):
             if isinstance(lease[field], bool) or not isinstance(
@@ -545,8 +556,9 @@ def _normalize_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
     normalized = deepcopy(dict(claim))
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"claim schema_version must be {SCHEMA_VERSION}")
-    for field in ("task_id", "holder", "candidate_head"):
+    for field in ("task_id", "holder", "lease_id", "candidate_head"):
         _required_text(normalized, field)
+    validate_task_id(normalized["task_id"])
     if normalized.get("claim") != "passes":
         raise ValueError("claim must be the typed value 'passes'")
     if not isinstance(normalized.get("artifacts"), list) or any(
@@ -595,6 +607,19 @@ def _required_text(value: Mapping[str, Any], field: str) -> str:
     return candidate
 
 
+def validate_task_id(value: Any) -> str:
+    """Return a task id that is safe as one workspace path component."""
+
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}", value
+    ):
+        raise ValueError(
+            "task id must be 1-120 ASCII letters, digits, dots, underscores, or "
+            "hyphens and must start with a letter or digit"
+        )
+    return value
+
+
 def _apply_plan_imported(
     state: dict[str, Any], transition: Mapping[str, Any]
 ) -> None:
@@ -620,12 +645,17 @@ def _apply_task_released(
 ) -> None:
     task_id = _required_text(transition, "task_id")
     holder = _required_text(transition, "holder")
+    lease_id = _required_text(transition, "lease_id")
     attempt_type = _required_text(transition, "attempt_type")
     if attempt_type not in {"work", "infra", "diagnostic"}:
         raise InvalidTransition(f"unknown attempt type: {attempt_type}")
     task = _task_by_id(state, task_id)
     lease = task["lease"]
-    if lease is None or lease["holder"] != holder:
+    if (
+        lease is None
+        or lease["holder"] != holder
+        or lease["lease_id"] != lease_id
+    ):
         raise InvalidTransition("released task is not leased by the holder")
     task["attempts"][attempt_type] += 1
     task["lease"] = None
@@ -662,12 +692,15 @@ def _validate_entry(entry: Mapping[str, Any], position: int) -> dict[str, Any]:
         )
     try:
         transition = _normalize_transition(entry["transition"])
-        state = _normalize_state(entry["state_after"])
+        raw_state = entry["state_after"]
+        if not isinstance(raw_state, Mapping):
+            raise ValueError("state_after must be an object")
+        state = _normalize_state(raw_state)
     except (KeyError, TypeError, ValueError) as error:
         raise StoreCorruption(
             f"invalid journal entry at complete line {position}: {error}"
         ) from error
-    if entry.get("state_hash") != _state_hash(state):
+    if entry.get("state_hash") != _state_hash(raw_state):
         raise StoreCorruption(
             f"journal state hash mismatch at complete line {position}"
         )

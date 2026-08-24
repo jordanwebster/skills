@@ -10,7 +10,7 @@ import subprocess
 from typing import Any
 
 from .base import DispatchResult
-from ..store import SCHEMA_VERSION, Store, StoreError
+from ..store import SCHEMA_VERSION, Store, StoreError, validate_task_id
 
 
 class FakeAdapter:
@@ -31,8 +31,9 @@ class FakeAdapter:
     ) -> DispatchResult:
         """Run one scripted step without invoking a model or network service."""
 
-        task_id = _required_text(binding, "task_id")
+        task_id = validate_task_id(_required_text(binding, "task_id"))
         holder = _required_text(binding, "holder")
+        lease_id = _required_text(binding, "lease_id")
         product_root = Path(_required_text(binding, "product_root")).resolve()
         result_root = self.store.root / "adapter-results" / task_id
         transcript_path = result_root / "transcript.json"
@@ -80,6 +81,7 @@ class FakeAdapter:
                         "schema_version": SCHEMA_VERSION,
                         "task_id": task_id,
                         "holder": holder,
+                        "lease_id": lease_id,
                         "claim": "passes",
                         "candidate_head": candidate_head,
                         "artifacts": step["artifacts"],

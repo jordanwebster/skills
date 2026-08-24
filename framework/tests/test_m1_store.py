@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -8,7 +9,7 @@ import sys
 import tempfile
 import unittest
 
-from scaffold.plan import PlanError, import_plan, read_plan
+from scaffold.plan import PlanError, import_plan, read_plan, retained_plan_path
 from scaffold.store import (
     InvalidTransition,
     Store,
@@ -76,9 +77,35 @@ class PlanAndFrontierTests(unittest.TestCase):
             self.store.read_journal()[-1]["transition"]["type"],
         )
         self.assertEqual(
-            (self.store.root / "inputs" / "plan.html").read_text(encoding="utf-8"),
+            retained_plan_path(self.store).read_text(encoding="utf-8"),
             (self.root / "plan.html").read_text(encoding="utf-8"),
         )
+
+    def test_rejected_reimport_cannot_replace_the_active_plan_source(self) -> None:
+        first_path = write_plan(self.root / "first.html", [task("first")])
+        self.import_tasks([task("first")])
+        active_path = retained_plan_path(self.store)
+        active_source = active_path.read_text(encoding="utf-8")
+        second_path = write_plan(self.root / "second.html", [task("replacement")])
+
+        with self.assertRaisesRegex(InvalidTransition, "already"):
+            import_plan(self.store, second_path)
+
+        self.assertEqual(active_path, retained_plan_path(self.store))
+        self.assertEqual(active_source, active_path.read_text(encoding="utf-8"))
+        self.assertNotEqual(
+            first_path.read_text(encoding="utf-8"),
+            second_path.read_text(encoding="utf-8"),
+        )
+
+    def test_task_id_cannot_escape_workspace_paths(self) -> None:
+        plan = write_plan(self.root / "traversal.html", [task("../escape")])
+
+        with self.assertRaisesRegex(ValueError, "task id"):
+            import_plan(self.store, plan)
+
+        self.assertFalse((self.root / "escape.json").exists())
+        self.assertEqual([], self.store.load()["tasks"])
 
     def test_plan_requires_exactly_one_typed_machine_block(self) -> None:
         invalid = self.root / "invalid.html"
@@ -192,7 +219,7 @@ else:
 
     def test_typed_claim_does_not_flip_until_framework_apply(self) -> None:
         self.import_tasks([task("first"), task("second", depends_on=["first"])])
-        self.store.claim("first", "worker-a")
+        lease = self.store.claim("first", "worker-a")
         source = self.root / "claim.json"
         source.write_text(
             json.dumps(
@@ -200,6 +227,7 @@ else:
                     "schema_version": 1,
                     "task_id": "first",
                     "holder": "worker-a",
+                    "lease_id": lease.lease_id,
                     "claim": "passes",
                     "candidate_head": "abc123",
                     "artifacts": ["first.txt"],
@@ -217,6 +245,7 @@ else:
                 "type": "task-verified",
                 "task_id": "first",
                 "holder": "worker-a",
+                "lease_id": lease.lease_id,
                 "verified_head": "abc123",
             }
         )
@@ -230,7 +259,7 @@ else:
 
     def test_expired_holder_cannot_file_a_claim(self) -> None:
         self.import_tasks([task("first")])
-        self.store.claim("first", "worker-a", ttl_seconds=10, now=100)
+        lease = self.store.claim("first", "worker-a", ttl_seconds=10, now=100)
         source = self.root / "late-claim.json"
         source.write_text(
             json.dumps(
@@ -238,6 +267,7 @@ else:
                     "schema_version": 1,
                     "task_id": "first",
                     "holder": "worker-a",
+                    "lease_id": lease.lease_id,
                     "claim": "passes",
                     "candidate_head": "abc123",
                     "artifacts": ["first.txt"],
@@ -251,7 +281,7 @@ else:
 
     def test_apply_rejects_verification_without_a_matching_claim(self) -> None:
         self.import_tasks([task("first")])
-        self.store.claim("first", "worker-a")
+        lease = self.store.claim("first", "worker-a")
 
         with self.assertRaisesRegex(InvalidTransition, "no filed claim"):
             self.store.apply(
@@ -259,11 +289,89 @@ else:
                     "type": "task-verified",
                     "task_id": "first",
                     "holder": "worker-a",
+                    "lease_id": lease.lease_id,
                     "verified_head": "abc123",
                 }
             )
 
         self.assertEqual("pending", self.store.load()["tasks"][0]["completion"])
+
+    def test_claim_from_an_earlier_lease_cannot_complete_a_later_lease(self) -> None:
+        self.import_tasks([task("first")])
+        first_lease = self.store.claim("first", "same-worker")
+        source = self.root / "first-claim.json"
+        source.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "task_id": "first",
+                    "holder": "same-worker",
+                    "lease_id": first_lease.lease_id,
+                    "claim": "passes",
+                    "candidate_head": "abc123",
+                    "artifacts": ["first.txt"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.store.file_claim("first", source)
+        self.store.apply(
+            {
+                "type": "task-released",
+                "task_id": "first",
+                "holder": "same-worker",
+                "lease_id": first_lease.lease_id,
+                "attempt_type": "work",
+            }
+        )
+        second_lease = self.store.claim("first", "same-worker")
+
+        self.assertNotEqual(first_lease.lease_id, second_lease.lease_id)
+        with self.assertRaisesRegex(InvalidTransition, "filed claim"):
+            self.store.apply(
+                {
+                    "type": "task-verified",
+                    "task_id": "first",
+                    "holder": "same-worker",
+                    "lease_id": second_lease.lease_id,
+                    "verified_head": "abc123",
+                }
+            )
+
+    def test_m0_state_without_plan_digest_migrates_and_imports(self) -> None:
+        legacy_root = self.root / "legacy-flight"
+        legacy_root.mkdir()
+        legacy_state = initial_state("Build the toy")
+        legacy_state.pop("plan_digest")
+        canonical = json.dumps(
+            legacy_state,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        entry = {
+            "sequence": 1,
+            "transition": {"type": "initialized"},
+            "state_hash": hashlib.sha256(canonical).hexdigest(),
+            "state_after": legacy_state,
+        }
+        (legacy_root / "journal.jsonl").write_text(
+            json.dumps(entry) + "\n", encoding="utf-8"
+        )
+        (legacy_root / "tasks.json").write_text(
+            json.dumps(legacy_state) + "\n", encoding="utf-8"
+        )
+        legacy_store = Store(legacy_root)
+
+        self.assertIsNone(legacy_store.load()["plan_digest"])
+        import_plan(
+            legacy_store,
+            write_plan(self.root / "legacy-plan.html", [task("first")]),
+        )
+        self.assertEqual(["first"], [item["id"] for item in legacy_store.ready()])
+
+    def test_unchecked_state_replacement_is_not_a_public_store_api(self) -> None:
+        self.assertFalse(hasattr(self.store, "replace"))
 
 
 if __name__ == "__main__":

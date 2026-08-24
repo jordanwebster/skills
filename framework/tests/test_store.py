@@ -8,6 +8,16 @@ import unittest
 from scaffold.store import Store, StoreCorruption, StoreExists, initial_state
 
 
+def plan_transition(goal: str, test_paths: list[str]) -> dict[str, object]:
+    return {
+        "type": "plan-imported",
+        "goal": goal,
+        "test_paths": test_paths,
+        "tasks": [],
+        "plan_digest": "a" * 64,
+    }
+
+
 class StoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -36,25 +46,20 @@ class StoreTests(unittest.TestCase):
 
         self.assertEqual("Keep this", self.store.load()["goal"])
 
-    def test_replace_appends_transition_and_materializes_state(self) -> None:
-        state = self.store.create(initial_state("Build it"))
-        state["test_paths"].append("tests/**")
+    def test_apply_appends_transition_and_materializes_state(self) -> None:
+        self.store.create(initial_state("Build it"))
 
-        replaced = self.store.replace(
-            state,
-            {"type": "configuration-updated"},
-        )
+        replaced = self.store.apply(plan_transition("Build it", ["tests/**"]))
 
-        self.assertEqual(state, replaced)
-        self.assertEqual(state, self.store.load())
+        self.assertEqual(["tests/**"], replaced["test_paths"])
+        self.assertEqual(replaced, self.store.load())
         entries = self.store.read_journal()
         self.assertEqual([1, 2], [entry["sequence"] for entry in entries])
-        self.assertEqual("configuration-updated", entries[-1]["transition"]["type"])
+        self.assertEqual("plan-imported", entries[-1]["transition"]["type"])
 
     def test_load_recovers_missing_or_stale_materialized_state(self) -> None:
-        state = self.store.create(initial_state("Recover it"))
-        state["test_paths"].append("tests/**")
-        self.store.replace(state, {"type": "configuration-updated"})
+        self.store.create(initial_state("Recover it"))
+        state = self.store.apply(plan_transition("Recover it", ["tests/**"]))
         self.store.state_path.write_text("{}\n", encoding="utf-8")
 
         recovered = self.store.load()
@@ -74,8 +79,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(1, len(self.store.read_journal()))
         self.assertTrue(self.store.journal_path.read_bytes().endswith(b"\n"))
 
-        state["test_paths"].append("checks/**")
-        self.store.replace(state, {"type": "configuration-updated"})
+        self.store.apply(plan_transition("Survive a tear", ["checks/**"]))
         self.assertEqual([1, 2], [
             entry["sequence"] for entry in self.store.read_journal()
         ])

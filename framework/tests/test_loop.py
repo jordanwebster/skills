@@ -8,7 +8,7 @@ import unittest
 
 from scaffold.adapters.fake import FakeAdapter
 from scaffold.loop import run_loop
-from scaffold.plan import import_plan
+from scaffold.plan import import_plan, retained_plan_path
 from scaffold.store import Store, initial_state
 
 
@@ -100,7 +100,7 @@ class LoopTests(unittest.TestCase):
             self.product,
             FakeAdapter(script, self.store),
             holder="fake-worker",
-            durable_paths=(self.store.root / "inputs" / "plan.html",),
+            durable_paths=(retained_plan_path(self.store),),
         )
 
         self.assertEqual("complete", result.status)

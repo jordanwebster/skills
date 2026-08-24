@@ -74,7 +74,7 @@ def run_loop(
 
         task = frontier[0]
         segment += 1
-        store.claim(task["id"], holder, ttl_seconds=lease_seconds)
+        lease = store.claim(task["id"], holder, ttl_seconds=lease_seconds)
         prompt = assemble_prompt(task, durable_paths)
         prompt_path = store.root / "prompts" / f"{task['id']}.txt"
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -84,6 +84,7 @@ def run_loop(
             {
                 "task_id": task["id"],
                 "holder": holder,
+                "lease_id": lease.lease_id,
                 "product_root": str(product),
             },
             "workspace-write",
@@ -95,6 +96,7 @@ def run_loop(
                     "type": "task-released",
                     "task_id": task["id"],
                     "holder": holder,
+                    "lease_id": lease.lease_id,
                     "attempt_type": "work",
                     "reason": result.exit_class,
                 }
@@ -118,6 +120,7 @@ def run_loop(
                     "type": "task-verified",
                     "task_id": task["id"],
                     "holder": holder,
+                    "lease_id": lease.lease_id,
                     "verified_head": claim["candidate_head"],
                     "verification": "candidate-is-clean-head",
                 }
@@ -128,6 +131,7 @@ def run_loop(
                     "type": "task-released",
                     "task_id": task["id"],
                     "holder": holder,
+                    "lease_id": lease.lease_id,
                     "attempt_type": "work",
                     "reason": str(error),
                 }

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 
 from . import __version__
 from .adapters.fake import FakeAdapter
 from .loop import run_loop
-from .plan import import_plan
+from .plan import import_plan, retained_plan_path
 from .store import Store, initial_state
 
 
@@ -61,20 +63,21 @@ def _init(repo: Path, goal: str, requested_slug: str | None) -> int:
         raise ValueError("flight slug must contain only lowercase letters, digits, hyphens")
     _exclude_scaffolding(product_root)
     workspace = product_root / ".scaffolding" / slug
-    Store(workspace).create(initial_state(goal))
-    (workspace / "config.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "product_root": str(product_root),
-                "title": goal,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    store = Store(workspace)
+    config = {
+        "schema_version": 1,
+        "product_root": str(product_root),
+        "title": goal,
+    }
+    if store.state_path.exists() or store.journal_path.exists():
+        state = store.load()
+        if state["goal"] != goal:
+            raise ValueError("existing workspace belongs to a different goal")
+        _restore_or_validate_config(workspace / "config.json", config)
+        print(workspace)
+        return 0
+    store.create(initial_state(goal))
+    _atomic_write_json(workspace / "config.json", config)
     print(workspace)
     return 0
 
@@ -89,7 +92,7 @@ def _run(parsed: argparse.Namespace) -> int:
     else:
         product = parsed.product
     adapter = FakeAdapter(parsed.script, store)
-    plan_path = parsed.workspace / "inputs" / "plan.html"
+    plan_path = retained_plan_path(store)
     result = run_loop(
         store,
         product,
@@ -136,6 +139,40 @@ def _exclude_scaffolding(product_root: Path) -> None:
             if existing and exclude_path.stat().st_size > 0:
                 handle.write("\n")
             handle.write(".scaffolding/\n")
+
+
+def _restore_or_validate_config(path: Path, expected: dict[str, object]) -> None:
+    if not path.exists():
+        _atomic_write_json(path, expected)
+        return
+    try:
+        observed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"existing workspace config is invalid: {error}") from error
+    if observed != expected:
+        raise ValueError("existing workspace config does not match this init request")
+
+
+def _atomic_write_json(path: Path, value: dict[str, object]) -> None:
+    payload = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
 
 if __name__ == "__main__":

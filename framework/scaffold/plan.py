@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from typing import Any
 
@@ -94,7 +95,7 @@ def import_plan(store: Store, path: str | Path) -> ImportedPlan:
 
     plan_path = Path(path)
     plan = read_plan(plan_path)
-    destination = store.root / "inputs" / "plan.html"
+    destination = retained_plan_path(store, plan.digest)
     _atomic_write_bytes(destination, plan_path.read_bytes())
     store.apply(
         {
@@ -106,6 +107,15 @@ def import_plan(store: Store, path: str | Path) -> ImportedPlan:
         }
     )
     return plan
+
+
+def retained_plan_path(store: Store, digest: str | None = None) -> Path:
+    """Return the immutable retained source selected by the store's plan digest."""
+
+    selected = digest if digest is not None else store.load()["plan_digest"]
+    if not isinstance(selected, str) or not re.fullmatch(r"[0-9a-f]{64}", selected):
+        raise PlanError("store does not name a valid imported plan digest")
+    return store.root / "inputs" / "plans" / f"{selected}.html"
 
 
 def _normalize_plan(value: Any) -> ImportedPlan:
