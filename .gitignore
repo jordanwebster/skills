@@ -8,3 +8,7 @@ notes/
 # Local-only skill configuration; operator facts never enter shared history.
 .handoff.toml
 .tasks.toml
+
+# Python bytecode generated while exercising the loop framework.
+__pycache__/
+*.py[cod]
