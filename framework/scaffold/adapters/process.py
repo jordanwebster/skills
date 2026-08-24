@@ -284,11 +284,15 @@ def _run_process(
     stderr_path: Path,
     timeout: float,
 ) -> tuple[int, bool]:
+    worker_environment = dict(environment)
+    worker_directory = str(cwd.resolve())
+    worker_environment["PWD"] = worker_directory
+    worker_environment["OLDPWD"] = worker_directory
     with stdout_path.open("wb") as stdout_handle, stderr_path.open("wb") as stderr_handle:
         process = subprocess.Popen(
             list(command),
             cwd=cwd,
-            env=dict(environment),
+            env=worker_environment,
             stdin=subprocess.PIPE,
             stdout=stdout_handle,
             stderr=stderr_handle,
@@ -365,53 +369,32 @@ def _reject_candidate_secrets(
     *,
     timeout: float,
 ) -> None:
-    changed = set(
-        _git_bytes(
-            checkout,
-            ("diff", "--name-only", "-z", base_head, candidate_head),
-            timeout=timeout,
-        ).split(b"\0")
+    introduced_objects = _git_bytes(
+        checkout,
+        ("rev-list", "--objects", f"{base_head}..{candidate_head}"),
+        timeout=timeout,
     )
-    changed.discard(b"")
-    tree_entries = _git_bytes(
-        checkout,
-        ("ls-tree", "-rz", candidate_head),
-        timeout=timeout,
-    ).split(b"\0")
-    for entry in tree_entries:
-        if not entry or b"\t" not in entry:
+    if _payload_contains_secret(introduced_objects, environment):
+        raise ValueError("candidate contains a sensitive value in a path")
+    for row in introduced_objects.splitlines():
+        if not row:
             continue
-        metadata, path = entry.split(b"\t", 1)
-        if path not in changed:
+        object_id = row.split(maxsplit=1)[0].decode("ascii")
+        object_type = _git(
+            checkout,
+            ("cat-file", "-t", object_id),
+            timeout=timeout,
+        ).strip()
+        if object_type not in {"blob", "commit"}:
             continue
-        parts = metadata.split()
-        if len(parts) != 3 or parts[1] != b"blob":
-            continue
-        if _payload_contains_secret(path, environment):
-            raise ValueError("candidate contains a sensitive value in a path")
         payload = _git_bytes(
             checkout,
-            ("cat-file", "blob", parts[2].decode("ascii")),
+            ("cat-file", object_type, object_id),
             timeout=timeout,
         )
         if _payload_contains_secret(payload, environment):
-            display_path = path.decode("utf-8", errors="replace")
-            raise ValueError(
-                f"candidate contains a sensitive value in {display_path}"
-            )
-    commits = _git(
-        checkout,
-        ("rev-list", f"{base_head}..{candidate_head}"),
-        timeout=timeout,
-    ).splitlines()
-    for commit in commits:
-        payload = _git_bytes(
-            checkout,
-            ("cat-file", "commit", commit),
-            timeout=timeout,
-        )
-        if _payload_contains_secret(payload, environment):
-            raise ValueError("candidate contains a sensitive value in commit metadata")
+            location = "commit metadata" if object_type == "commit" else "history"
+            raise ValueError(f"candidate contains a sensitive value in {location}")
 
 
 def _normalize_claim(value: Mapping[str, Any]) -> dict[str, Any]:

@@ -15,7 +15,7 @@ fi
 
 output=$(cat "$output_file")
 assert_eq \
-    "build incomplete: M4 adapter isolation is incomplete" \
+    "build incomplete: M5 judge, outbox, and bless are not implemented" \
     "$output" \
     "the whole-build check should name the first remaining milestone"
 

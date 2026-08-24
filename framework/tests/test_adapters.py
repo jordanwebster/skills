@@ -323,6 +323,36 @@ class RealAdapterFlightTests(unittest.TestCase):
         self.assertNotIn(SECRET, retained)
         self.assertIn("candidate contains a sensitive value", retained)
 
+    def test_candidate_with_deleted_intermediate_secret_is_not_published(self) -> None:
+        roster_path = self._write_roster("claude")
+        with patch.dict(
+            os.environ,
+            {
+                "ANTHROPIC_API_KEY": SECRET,
+                "SCAFFOLD_FIXTURE_MODE": "commit-secret-then-delete",
+            },
+        ):
+            result = run_loop(
+                self.store,
+                self.product,
+                RosterAdapter(self.store, roster_path),
+                holder="fixture-worker",
+                dispatch_timeout=5,
+                durable_paths=(retained_plan_path(self.store),),
+            )
+
+        self.assertEqual("failed", result.status)
+        self.assertEqual(self.base_head, git(self.product, "rev-parse", "HEAD"))
+        task = self.store.load()["tasks"][0]
+        self.assertEqual(1, task["attempts"]["work"])
+        retained = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (self.workspace / "adapter-results").rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn(SECRET, retained)
+        self.assertIn("candidate contains a sensitive value in history", retained)
+
     def _assert_vendor_flight(self, vendor: str) -> None:
         roster_path = self._write_roster(vendor)
         output = io.StringIO()
@@ -424,13 +454,26 @@ class RealAdapterFlightTests(unittest.TestCase):
             if "M4_TEST_API_KEY" in os.environ:
                 print("worker inherited an unrelated secret", file=sys.stderr)
                 raise SystemExit(6)
+            working_directory = Path.cwd().resolve()
+            for directory_name in ("PWD", "OLDPWD"):
+                inherited = os.environ.get(directory_name)
+                if not inherited or Path(inherited).resolve() != working_directory:
+                    print(f"{{directory_name}} disclosed the source checkout", file=sys.stderr)
+                    raise SystemExit(7)
+            if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "commit-secret-then-delete":
+                Path("transient.txt").write_text(os.environ["ANTHROPIC_API_KEY"] + "\\n")
+                subprocess.run(["git", "config", "user.name", "Fixture CLI"], check=True)
+                subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], check=True)
+                subprocess.run(["git", "add", "transient.txt"], check=True)
+                subprocess.run(["git", "commit", "--quiet", "-m", "Add transient data"], check=True)
+                Path("transient.txt").unlink()
             content = "built by " + vendor + "\\n"
             if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "commit-secret":
                 content = os.environ["OPENAI_API_KEY"] + "\\n"
             Path("artifact.txt").write_text(content)
             subprocess.run(["git", "config", "user.name", "Fixture CLI"], check=True)
             subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], check=True)
-            subprocess.run(["git", "add", "artifact.txt"], check=True)
+            subprocess.run(["git", "add", "--all"], check=True)
             subprocess.run(["git", "commit", "--quiet", "-m", "Build adapter artifact"], check=True)
             head = subprocess.run(
                 ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
