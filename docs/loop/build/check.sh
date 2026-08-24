@@ -20,5 +20,5 @@ if ! goal_output=$(timeout 120 env PYTHONPATH="$framework_root" \
     exit 1
 fi
 
-echo "build incomplete: M3 supervision is not implemented"
+echo "build incomplete: M4 real adapters are not implemented"
 exit 1

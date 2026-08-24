@@ -15,18 +15,18 @@ fi
 
 output=$(cat "$output_file")
 assert_eq \
-    "build incomplete: M3 supervision is not implemented" \
+    "build incomplete: M4 real adapters are not implemented" \
     "$output" \
     "the whole-build check should name the first remaining milestone"
 
 goal_output=$(timeout 120 env PYTHONPATH="$repo_root/framework" \
     python3 "$repo_root/framework/tests/toy_flight_goal.py")
 assert_eq \
-    "toy flight M2 green" \
+    "toy flight M3 green" \
     "$goal_output" \
-    "the M2 toy flight should run green unattended"
+    "the M3 toy flight should run green unattended"
 
 timeout 120 env PYTHONPATH="$repo_root/framework" \
     python3 -m unittest discover -s "$repo_root/framework/tests" -p 'test_*.py'
 
-echo "loop M0-M2 tests passed"
+echo "loop M0-M3 tests passed"

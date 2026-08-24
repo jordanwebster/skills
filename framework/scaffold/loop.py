@@ -25,6 +25,21 @@ class Adapter(Protocol):
     ) -> DispatchResult: ...
 
 
+class Lifecycle(Protocol):
+    """Supervision callbacks around the worker-mutation boundary."""
+
+    def task_started(
+        self,
+        task: Mapping[str, Any],
+        lease: Any,
+        base_head: str,
+    ) -> None: ...
+
+    def task_finished(self) -> None: ...
+
+    def should_drain(self) -> bool: ...
+
+
 @dataclass(frozen=True)
 class RunResult:
     """The mechanical outcome of one worker slice."""
@@ -45,6 +60,7 @@ def run_loop(
     dispatch_timeout: float = 60,
     durable_paths: Sequence[str | Path] = (),
     binding_label: str = "worker",
+    lifecycle: Lifecycle | None = None,
 ) -> RunResult:
     """Pull and complete frontier tasks until done, blocked, or one failure."""
 
@@ -58,6 +74,12 @@ def run_loop(
             for task in state["tasks"]
         ):
             return RunResult("complete", tuple(completed), "all tasks are green")
+        if lifecycle is not None and lifecycle.should_drain():
+            return RunResult(
+                "drained",
+                tuple(completed),
+                "drain requested at a task boundary",
+            )
 
         frontier = store.ready(profile)
         if not frontier:
@@ -90,6 +112,8 @@ def run_loop(
             holder,
             ttl_seconds=lease_seconds + dispatch_timeout,
         )
+        if lifecycle is not None:
+            lifecycle.task_started(task, lease, base_head)
         prompt = assemble_prompt(task, durable_paths)
         prompt_path = store.root / "prompts" / f"{task['id']}.txt"
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +147,8 @@ def run_loop(
                     "reason": result.exit_class,
                 }
             )
+            if lifecycle is not None:
+                lifecycle.task_finished()
             _event(
                 store,
                 f"segment {segment}: {task['id']} -> {binding_label}; worker "
@@ -151,6 +177,8 @@ def run_loop(
                     "reason": str(error),
                 }
             )
+            if lifecycle is not None:
+                lifecycle.task_finished()
             _event(
                 store,
                 f"segment {segment}: {task['id']} -> {binding_label}; "
@@ -203,6 +231,8 @@ def run_loop(
                     "reason": verdict.reason,
                 }
             )
+            if lifecycle is not None:
+                lifecycle.task_finished()
             _event(
                 store,
                 f"segment {segment}: {task['id']} -> {binding_label}; "
@@ -251,6 +281,9 @@ def run_loop(
                 tuple(completed),
                 f"verification machinery malformed: {error}",
             )
+
+        if lifecycle is not None:
+            lifecycle.task_finished()
 
         if verdict.kind == "red":
             _event(

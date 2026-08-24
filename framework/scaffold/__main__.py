@@ -8,13 +8,27 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
+import uuid
 
 from . import __version__
 from .adapters.fake import FakeAdapter
 from .loop import run_loop
 from .plan import import_plan, retained_plan_path
 from .store import Store, initial_state
+from .supervise import (
+    DriverBusy,
+    StopSignal,
+    SupervisionError,
+    Supervisor,
+    install_stop_signal_handlers,
+    read_status,
+    request_drain,
+    restore_signal_handlers,
+    start_detached,
+    stop_driver,
+)
 
 
 def main(arguments: list[str] | None = None) -> int:
@@ -37,12 +51,34 @@ def main(arguments: list[str] | None = None) -> int:
     import_parser.add_argument("plan", type=Path)
 
     run_parser = commands.add_parser("run", help="run one foreground worker slice")
-    run_parser.add_argument("workspace", type=Path)
-    run_parser.add_argument("--adapter", choices=("fake",), required=True)
-    run_parser.add_argument("--script", type=Path, required=True)
-    run_parser.add_argument("--product", type=Path)
-    run_parser.add_argument("--holder", default="fake-worker")
-    run_parser.add_argument("--profile")
+    _add_run_arguments(run_parser)
+    run_parser.add_argument("--run-id", help=argparse.SUPPRESS)
+    run_parser.add_argument(
+        "--supervised-child",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+
+    start_parser = commands.add_parser(
+        "start", help="start a detached supervised worker slice"
+    )
+    _add_run_arguments(start_parser)
+    start_parser.add_argument("--launch-timeout", type=float, default=5.0)
+
+    status_parser = commands.add_parser("status", help="read driver liveness")
+    status_parser.add_argument("workspace", type=Path)
+    status_parser.add_argument("--stale-after", type=float, default=10.0)
+
+    drain_parser = commands.add_parser(
+        "drain", help="finish the active task, then stop"
+    )
+    drain_parser.add_argument("workspace", type=Path)
+
+    stop_parser = commands.add_parser(
+        "stop", help="stop the active driver process group"
+    )
+    stop_parser.add_argument("workspace", type=Path)
+    stop_parser.add_argument("--timeout", type=float, default=5.0)
 
     parsed = parser.parse_args(arguments)
     if parsed.command == "init":
@@ -53,7 +89,38 @@ def main(arguments: list[str] | None = None) -> int:
         return 0
     if parsed.command == "run":
         return _run(parsed)
+    if parsed.command == "start":
+        return _start(parsed)
+    if parsed.command == "status":
+        status = read_status(parsed.workspace, stale_after=parsed.stale_after)
+        print(f"{status.state}: {status.reason}")
+        return 0
+    if parsed.command == "drain":
+        try:
+            request_drain(parsed.workspace)
+        except SupervisionError as error:
+            print(f"cannot drain: {error}")
+            return 1
+        print("drain requested: the driver will stop after its active task")
+        return 0
+    if parsed.command == "stop":
+        try:
+            stop_driver(parsed.workspace, timeout=parsed.timeout)
+        except SupervisionError as error:
+            print(f"cannot stop: {error}")
+            return 1
+        print("stopped: the driver process group released its flight lock")
+        return 0
     parser.error(f"unknown command: {parsed.command}")
+
+
+def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("workspace", type=Path)
+    parser.add_argument("--adapter", choices=("fake",), required=True)
+    parser.add_argument("--script", type=Path, required=True)
+    parser.add_argument("--product", type=Path)
+    parser.add_argument("--holder", default="fake-worker")
+    parser.add_argument("--profile")
 
 
 def _init(repo: Path, goal: str, requested_slug: str | None) -> int:
@@ -83,27 +150,94 @@ def _init(repo: Path, goal: str, requested_slug: str | None) -> int:
 
 
 def _run(parsed: argparse.Namespace) -> int:
-    store = Store(parsed.workspace)
+    workspace = parsed.workspace.resolve()
+    store = Store(workspace)
     if parsed.product is None:
         config = json.loads(
-            (parsed.workspace / "config.json").read_text(encoding="utf-8")
+            (workspace / "config.json").read_text(encoding="utf-8")
         )
-        product = Path(config["product_root"])
+        product = Path(config["product_root"]).resolve()
     else:
-        product = parsed.product
+        product = parsed.product.resolve()
     adapter = FakeAdapter(parsed.script, store)
     plan_path = retained_plan_path(store)
-    result = run_loop(
-        store,
+    runtime = Supervisor(
+        workspace,
         product,
-        adapter,
-        holder=parsed.holder,
-        profile=parsed.profile,
-        durable_paths=(plan_path,),
-        binding_label=parsed.adapter,
+        run_id=getattr(parsed, "run_id", None),
+        isolate_process_group=True,
     )
+    try:
+        with runtime:
+            previous_handlers = install_stop_signal_handlers()
+            try:
+                runtime.recover(store)
+                result = run_loop(
+                    store,
+                    product,
+                    adapter,
+                    holder=parsed.holder,
+                    profile=parsed.profile,
+                    durable_paths=(plan_path,),
+                    binding_label=parsed.adapter,
+                    lifecycle=runtime,
+                )
+            except StopSignal:
+                runtime.finish("stopped", "driver was stopped")
+                print("stopped: driver was stopped during its active task")
+                return 1
+            finally:
+                restore_signal_handlers(previous_handlers)
+            terminal_state = {
+                "complete": "complete",
+                "drained": "drained",
+                "blocked": "paused",
+                "no-compatible-work": "paused",
+            }.get(result.status, "failed")
+            runtime.finish(terminal_state, result.reason)
+    except (DriverBusy, SupervisionError) as error:
+        print(f"cannot run: {error}")
+        return 1
     print(f"{result.status}: {result.reason}")
-    return 0 if result.status == "complete" else 1
+    return 0 if result.status in {"complete", "drained"} else 1
+
+
+def _start(parsed: argparse.Namespace) -> int:
+    workspace = parsed.workspace.resolve()
+    run_id = uuid.uuid4().hex
+    command = [
+        sys.executable,
+        "-m",
+        "scaffold",
+        "run",
+        str(workspace),
+        "--adapter",
+        parsed.adapter,
+        "--script",
+        str(parsed.script.resolve()),
+        "--holder",
+        parsed.holder,
+        "--run-id",
+        run_id,
+        "--supervised-child",
+    ]
+    if parsed.product is not None:
+        command.extend(("--product", str(parsed.product.resolve())))
+    if parsed.profile is not None:
+        command.extend(("--profile", parsed.profile))
+    try:
+        pid = start_detached(
+            command,
+            workspace,
+            run_id,
+            launch_timeout=parsed.launch_timeout,
+            environment=os.environ.copy(),
+        )
+    except (OSError, SupervisionError) as error:
+        print(f"cannot start: {error}")
+        return 1
+    print(f"started: driver {pid} is detached; you can close this shell")
+    return 0
 
 
 def _slugify(value: str) -> str:

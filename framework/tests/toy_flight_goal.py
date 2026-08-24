@@ -1,4 +1,4 @@
-"""M2 goal function: a fresh fake-worker flight verifies unattended to green."""
+"""M3 goal function: a supervised fake-worker flight verifies to green."""
 
 from __future__ import annotations
 
@@ -140,7 +140,7 @@ raise SystemExit(0 if exists else 1)
         ).is_file():
             raise AssertionError("toy flight omitted a demonstrated artifact")
 
-    print("toy flight M2 green")
+    print("toy flight M3 green")
     return 0
 
 

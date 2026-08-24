@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import time
 from typing import Any
 
 from .base import DispatchResult
@@ -77,6 +78,8 @@ class FakeAdapter:
                 ["rev-parse", "HEAD"],
                 timeout=timeout,
             ).strip()
+            if step["pause_seconds"]:
+                time.sleep(step["pause_seconds"])
             evidence_source = result_root / "claim-source.json"
             evidence_source.write_text(
                 json.dumps(
@@ -152,11 +155,19 @@ def _normalize_step(value: Any) -> dict[str, Any]:
         not isinstance(item, str) or not item for item in artifacts
     ):
         raise ValueError("fake artifacts must be a list of non-empty strings")
+    pause_seconds = value.get("pause_seconds", 0)
+    if (
+        isinstance(pause_seconds, bool)
+        or not isinstance(pause_seconds, (int, float))
+        or pause_seconds < 0
+    ):
+        raise ValueError("fake pause_seconds must be a non-negative number")
     return {
         "task_id": task_id,
         "commit_message": commit_message,
         "writes": dict(writes),
         "artifacts": list(artifacts),
+        "pause_seconds": float(pause_seconds),
     }
 
 
@@ -164,6 +175,8 @@ def _safe_product_path(root: Path, relative_name: str) -> Path:
     relative = Path(relative_name)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"fake write escapes product root: {relative_name}")
+    if relative.parts and relative.parts[0] == ".scaffolding":
+        raise ValueError("fake worker cannot write framework control state")
     candidate = (root / relative).resolve()
     if os.path.commonpath([root, candidate]) != str(root):
         raise ValueError(f"fake write escapes product root: {relative_name}")
