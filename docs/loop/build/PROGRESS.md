@@ -145,10 +145,16 @@ next iteration trusts this file over anything else.
   detached-shell survival, boundary drain/resume, and kill-after-candidate/relaunch.
   The independent review found two medium boundary defects: fake-worker path aliases
   could reach control state, and drain was not linearized with the next lease. Both
-  were fixed in `5350e50` (`Close M3 supervision boundary races`) with resolved-path
-  containment, a drain/claim boundary lock, and regressions; the recovery seed now
-  uses uncatchable `SIGKILL` rather than graceful stop. Fifty-six stdlib framework
-  tests, the supervised fresh toy flight, and the full repository suite pass. The
+  were addressed in `5350e50` (`Close M3 supervision boundary races`) with resolved-
+  path containment, a drain/claim boundary lock, and regressions; the recovery seed
+  now uses uncatchable `SIGKILL` rather than graceful stop. The one bounded re-check
+  confirmed the drain and crash fixes but found a remaining medium control-path alias:
+  on a case-insensitive filesystem, a symlink whose target is spelled `.SCAFFOLDING`
+  can still reach the real lowercase framework directory because the resolved-prefix
+  comparison is case-sensitive. Per the build's fixed contract, this review finding
+  is recorded without reopening green M3 or moving `check.sh` backward; M4 must carry
+  it as adapter-sandbox hardening. Fifty-six stdlib framework tests, the supervised
+  fresh toy flight, and the full repository suite pass. The
   roster-selected Claude Opus reviewer was still unauthenticated, so the review and
   bounded re-check used fresh read-only `gpt-5.6-sol` xhigh contexts in a disposable
   checkout and lack cross-family diversity. The whole-build check honestly exits 1
@@ -161,6 +167,8 @@ next iteration trusts this file over anything else.
   transcripts, and retained-log secret filtering.
 - Resolve bindings mechanically from the delegate roster without allowing vendor
   knowledge to escape `framework/scaffold/adapters/`.
+- Close the recorded case-variant symlink path into `.scaffolding` while establishing
+  the M4 worker sandbox boundary; add the exact `.SCAFFOLDING` symlink regression.
 - Run the toy flight through each real CLI. If local authentication is unavailable,
   implement and fixture-test the complete command/result boundary and record the
   live-auth gap in `QUESTIONS.md` as the brief directs.
