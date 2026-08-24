@@ -143,9 +143,16 @@ next iteration trusts this file over anything else.
   and continue immediately. Seeded tests cover a refused second writer, stillborn
   launch, stale-pid/heartbeat classification, descendant process-group termination,
   detached-shell survival, boundary drain/resume, and kill-after-candidate/relaunch.
-  Fifty-four stdlib framework tests, the supervised fresh toy flight, and the full
-  repository suite pass. The whole-build check honestly exits 1 with `build
-  incomplete: M4 real adapters are not implemented`.
+  The independent review found two medium boundary defects: fake-worker path aliases
+  could reach control state, and drain was not linearized with the next lease. Both
+  were fixed in `5350e50` (`Close M3 supervision boundary races`) with resolved-path
+  containment, a drain/claim boundary lock, and regressions; the recovery seed now
+  uses uncatchable `SIGKILL` rather than graceful stop. Fifty-six stdlib framework
+  tests, the supervised fresh toy flight, and the full repository suite pass. The
+  roster-selected Claude Opus reviewer was still unauthenticated, so the review and
+  bounded re-check used fresh read-only `gpt-5.6-sol` xhigh contexts in a disposable
+  checkout and lack cross-family diversity. The whole-build check honestly exits 1
+  with `build incomplete: M4 real adapters are not implemented`.
 
 ## Next
 
