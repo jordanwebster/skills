@@ -5,11 +5,13 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scaffold.adapters.fake import FakeAdapter
 from scaffold.loop import run_loop
 from scaffold.plan import import_plan, retained_plan_path
 from scaffold.store import Store, TaskUnavailable, initial_state
+from scaffold.verify import Verdict
 
 
 def git(root: Path, *arguments: str) -> str:
@@ -383,6 +385,58 @@ raise SystemExit(0 if exists else 1)
             reserved["verified_head"],
             git(self.product, "rev-parse", "HEAD").strip(),
         )
+
+    def test_killed_and_infra_verification_do_not_burn_work_attempts(self) -> None:
+        base_head = git(self.product, "rev-parse", "HEAD").strip()
+        for kind in ("killed", "infra"):
+            with self.subTest(kind=kind):
+                plan = Store(self.root / f"{kind}-verification-flight")
+                plan.create(initial_state("Build the toy"))
+                import_plan(
+                    plan,
+                    write_plan(
+                        self.root / f"{kind}-verification-plan.html",
+                        [task(kind)],
+                    ),
+                )
+                script = self.write_script(
+                    [
+                        {
+                            "task_id": kind,
+                            "commit_message": f"Build {kind} artifact",
+                            "writes": {f"{kind}.txt": f"{kind}\n"},
+                        }
+                    ]
+                )
+                verdict = Verdict(
+                    kind,
+                    f"seeded {kind} verification",
+                    plan.root / "seeded-verdict.json",
+                    "0" * 64,
+                    (),
+                )
+
+                with patch("scaffold.loop.verify", return_value=verdict):
+                    result = run_loop(
+                        plan,
+                        self.product,
+                        FakeAdapter(script, plan),
+                        holder=f"{kind}-worker",
+                    )
+
+                self.assertEqual("failed", result.status, result.reason)
+                failed = plan.load()["tasks"][0]
+                self.assertEqual("pending", failed["completion"])
+                self.assertIsNone(failed["lease"])
+                self.assertEqual(
+                    {"work": 0, "infra": 1, "diagnostic": 0},
+                    failed["attempts"],
+                )
+                self.assertEqual(
+                    base_head,
+                    git(self.product, "rev-parse", "HEAD").strip(),
+                )
+                self.assertFalse((self.product / f"{kind}.txt").exists())
 
     def test_out_of_scope_check_edit_withholds_green_flip(self) -> None:
         plan = Store(self.root / "test-edit-flight")
