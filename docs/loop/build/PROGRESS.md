@@ -36,7 +36,8 @@ next iteration trusts this file over anything else.
   and the full repository suite pass. The whole-build check intentionally exits 1
   with `build incomplete: M1 toy-flight runner is not implemented`.
 - 2026-08-24 — M1 complete in `667c589` (`Implement M1 fake-adapter build
-  loop`). Landed canonical HTML plan-block import, strict dependency-graph state,
+  loop`), with the independently replayable loop-test fix in `b93fd52` (`Make M1
+  loop test independently replayable`). Landed canonical HTML plan-block import, strict dependency-graph state,
   deterministic profile-filtered frontier selection, atomic single-worker leases
   with expiry, typed claims separate from framework-owned transitions, durable
   prompt assembly, a scripted fake adapter, candidate-commit identity checks, and
