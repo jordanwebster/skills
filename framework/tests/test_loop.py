@@ -11,8 +11,6 @@ from scaffold.loop import run_loop
 from scaffold.plan import import_plan
 from scaffold.store import Store, initial_state
 
-from test_m1_store import task, write_plan
-
 
 def git(root: Path, *arguments: str) -> str:
     completed = subprocess.run(
@@ -24,6 +22,35 @@ def git(root: Path, *arguments: str) -> str:
         timeout=30,
     )
     return completed.stdout
+
+
+def task(task_id: str, *, depends_on: list[str] | None = None) -> dict[str, object]:
+    return {
+        "id": task_id,
+        "title": f"Do {task_id}",
+        "role": "implementer",
+        "effort": "small",
+        "check": f"check-{task_id}",
+        "depends_on": list(depends_on or []),
+        "decisions": [f"{task_id} stays in scope"],
+    }
+
+
+def write_plan(path: Path, tasks: list[dict[str, object]]) -> Path:
+    machine = {
+        "schema_version": 1,
+        "goal": "Build the toy",
+        "test_paths": ["tests/**"],
+        "tasks": tasks,
+    }
+    path.write_text(
+        "<h1>Readable plan</h1>\n"
+        '<script type="application/json" id="scaffold-plan">\n'
+        + json.dumps(machine)
+        + "\n</script>\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 class LoopTests(unittest.TestCase):
