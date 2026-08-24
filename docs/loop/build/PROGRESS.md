@@ -8,10 +8,10 @@ next iteration trusts this file over anything else.
 - [x] M0 — Skeleton: package layout, store read/write/journal, toy-flight goal
       function created and red. Check: check.sh exists, executes, and fails for
       the right reason.
-- [ ] M1 — Loop on fake adapter: selection, leasing, prompt assembly, apply.
-      The toy-flight check is green, but final independent re-check found one
-      remaining medium retained-plan directory durability defect; M1 is not complete
-      until it is fixed.
+- [x] M1 — Loop on fake adapter: selection, leasing, prompt assembly, apply.
+      Check: the toy flight runs green end-to-end unattended; retained-plan
+      publication is crash-durable across fresh-directory creation and identical
+      retries.
 - [ ] M2 — Verification runner: test-glob diff-gate, verdict enum,
       malformed-reddens-task, artifact-based judgment. Check: seeded lying-worker
       and bad-paperwork tests pass; toy flight stays green.
@@ -76,19 +76,24 @@ next iteration trusts this file over anything else.
   Per Handoff's stop bar, no second automatic fix loop was taken. The whole-build
   check honestly exits 1 with `build incomplete: M1 retained plan directory hierarchy
   is not crash-durable`.
+- 2026-08-24 — M1 completed in `f982b00` (`Make retained plan directories
+  crash-durable`). Retained-plan import now creates each directory one level at a
+  time and fsyncs its parent before advancing, repeats those fsyncs on recovery, and
+  fsyncs the leaf directory for both a new hard link and an identical existing file
+  before committing the store transition. Regressions inject the former leaf-fsync
+  failure and prove an identical retry cannot apply state before the directory is
+  durable. Thirty-one stdlib framework tests and the full repository suite pass.
+  The roster-selected Claude reviewer remained unauthenticated, and the installed
+  Codex CLI was too old for its roster model; the recorded reversible default used a
+  fresh read-only native `gpt-5.6-sol` reviewer at xhigh effort. That reviewer found
+  no medium-or-higher issue; the low residual concern is that durability is proved by
+  injected fsync ordering rather than a real power-loss/filesystem recovery test.
+  The whole-build check now honestly exits 1 with `build incomplete: M2
+  seeded-failure suite is not implemented`.
 
 ## Next
 
-- Finish M1 before any M2 work: make retained-plan directory publication durable from
-  a fresh workspace. Add regressions proving each newly created directory entry is
-  fsynced through the chain (`workspace` after `inputs`, `inputs` after `plans`, then
-  `plans` after the retained file link) before the store transition can commit. Inject
-  a leaf-directory fsync failure, retry the identical retained source, and prove the
-  retry fsyncs the directory before applying state. Re-run the M1 proofs, restore
-  `check.sh`'s next reason to the missing M2 seeded-failure suite, and obtain one
-  independent check focused on this exact durability boundary.
-- After M1 is complete, build M2 only: add the verification runner's
-  restore-and-hash isolation, closed
+- Build M2 only: add the verification runner's restore-and-hash isolation, closed
   verdict artifacts, test-glob diff gating, artifact-based judgment, and the
   malformed-evidence boundary that reddens only its task. Seed the lying-worker and
   bad-paperwork failures while keeping the M1 toy flight green.

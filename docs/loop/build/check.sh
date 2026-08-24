@@ -20,5 +20,5 @@ if ! goal_output=$(timeout 120 env PYTHONPATH="$framework_root" \
     exit 1
 fi
 
-echo "build incomplete: M1 retained plan directory hierarchy is not crash-durable"
+echo "build incomplete: M2 seeded-failure suite is not implemented"
 exit 1
