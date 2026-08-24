@@ -14,3 +14,4 @@ class DispatchResult:
     transcript_path: Path
     last_message_path: Path
     binding_label: str | None = None
+    failure_reason: str | None = None

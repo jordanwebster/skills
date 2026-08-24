@@ -206,6 +206,8 @@ def _run(parsed: argparse.Namespace) -> int:
                 "drained": "drained",
                 "blocked": "paused",
                 "no-compatible-work": "paused",
+                "awaiting-operator": "paused",
+                "parked": "paused",
             }.get(result.status, "failed")
             runtime.finish(terminal_state, result.reason)
     except (DriverBusy, SupervisionError) as error:

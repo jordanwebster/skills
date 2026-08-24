@@ -269,6 +269,38 @@ class RealAdapterFlightTests(unittest.TestCase):
         self.assertEqual(1, task["attempts"]["work"])
         self.assertEqual(self.base_head, git(self.product, "rev-parse", "HEAD"))
 
+    def test_real_adapter_ambiguity_parks_without_publishing_a_candidate(self) -> None:
+        roster_path = self._write_roster("codex")
+        adapter = RosterAdapter(self.store, roster_path)
+        with patch.dict(
+            os.environ,
+            {"SCAFFOLD_FIXTURE_MODE": "ambiguity", "OPENAI_API_KEY": SECRET},
+        ):
+            result = run_loop(
+                self.store,
+                self.product,
+                adapter,
+                holder="fixture-worker",
+                dispatch_timeout=5,
+                durable_paths=(retained_plan_path(self.store),),
+                clock=lambda: 321.0,
+                id_source=lambda: "real-ambiguity",
+            )
+
+        self.assertEqual("awaiting-operator", result.status)
+        task = self.store.load()["tasks"][0]
+        self.assertTrue(task["parked"])
+        self.assertEqual(1, task["attempts"]["diagnostic"])
+        self.assertEqual(0, task["attempts"]["work"])
+        self.assertEqual(self.base_head, git(self.product, "rev-parse", "HEAD"))
+        retained = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in self.workspace.rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn(SECRET, retained)
+        self.assertIn("<redacted>", retained)
+
     def test_roster_arguments_cannot_override_vendor_sandbox(self) -> None:
         roster_path = self._write_roster("codex")
         source = roster_path.read_text(encoding="utf-8").replace(
@@ -491,6 +523,23 @@ class RealAdapterFlightTests(unittest.TestCase):
                 if not inherited or Path(inherited).resolve() != working_directory:
                     print(f"{{directory_name}} disclosed the source checkout", file=sys.stderr)
                     raise SystemExit(7)
+            if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "ambiguity":
+                claim = {{
+                    "claim": "ambiguity",
+                    "candidate_head": None,
+                    "artifacts": [],
+                    "reason": (
+                        "The plan permits two incompatible output formats: "
+                        + os.environ.get("OPENAI_API_KEY", "none")
+                    ),
+                }}
+                if vendor == "codex":
+                    output_path = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+                    output_path.write_text(json.dumps(claim) + "\\n")
+                    print(json.dumps({{"type": "result"}}))
+                elif vendor == "claude":
+                    print(json.dumps({{"type": "result", "structured_output": claim}}))
+                raise SystemExit(0)
             if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "commit-secret-then-delete":
                 Path("transient.txt").write_text(os.environ["ANTHROPIC_API_KEY"] + "\\n")
                 subprocess.run(["git", "config", "user.name", "Fixture CLI"], check=True)
@@ -515,6 +564,7 @@ class RealAdapterFlightTests(unittest.TestCase):
                 "claim": "passes",
                 "candidate_head": head,
                 "artifacts": ["artifact.txt", "{SECRET}"],
+                "reason": None,
             }}
             if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "malformed":
                 claim = {{"claim": "passes"}}

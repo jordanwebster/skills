@@ -189,6 +189,203 @@ raise SystemExit(0 if exists else 1)
         self.assertIsNone(first["lease"])
         self.assertEqual("pending", first["completion"])
 
+    def test_retry_cap_invokes_typed_judge_and_records_durable_escalation(self) -> None:
+        class RetryJudge:
+            calls: list[tuple[str, str, str]] = []
+
+            def decide(self, judged_task, trigger, failure):
+                self.calls.append((judged_task["id"], trigger, failure))
+                return {
+                    "schema_version": 1,
+                    "task_id": judged_task["id"],
+                    "trigger": trigger,
+                    "decision": "defer-to-operator",
+                    "reason": "The repeated failure needs a changed approach.",
+                }
+
+        judge = RetryJudge()
+        for attempt in range(3):
+            script = self.write_script(
+                [
+                    {
+                        "task_id": "wrong-task",
+                        "commit_message": "Never reached",
+                        "writes": {"wrong.txt": "wrong\n"},
+                    }
+                ]
+            )
+            result = run_loop(
+                self.store,
+                self.product,
+                FakeAdapter(script, self.store),
+                holder=f"worker-{attempt}",
+                judge=judge,
+                work_attempt_limit=3,
+                clock=lambda: 123.0,
+                id_source=lambda: "retry-cap",
+            )
+
+        self.assertEqual("awaiting-operator", result.status)
+        self.assertEqual([("first", "retry-cap", "worker-error")], judge.calls)
+        restarted = Store(self.store.root).load()
+        failed = restarted["tasks"][0]
+        self.assertEqual(3, failed["attempts"]["work"])
+        self.assertEqual(0, failed["attempts"]["diagnostic"])
+        self.assertTrue(failed["parked"])
+        self.assertEqual("judge", failed["judgments"][0]["source"])
+        self.assertEqual("retry-cap", failed["judgments"][0]["trigger"])
+        self.assertEqual("esc-retry-cap", restarted["outbox"][0]["id"])
+        self.assertEqual("veto-or-confirm", restarted["outbox"][0]["request"])
+        self.assertEqual("open", restarted["outbox"][0]["status"])
+        self.assertEqual(
+            "task-judged",
+            self.store.read_journal()[-1]["transition"]["type"],
+        )
+
+    def test_ambiguity_parks_without_retry_and_independent_work_continues(self) -> None:
+        plan = Store(self.root / "ambiguity-flight")
+        plan.create(initial_state("Build the toy"))
+        import_plan(
+            plan,
+            write_plan(
+                self.root / "ambiguity-plan.html",
+                [task("unclear"), task("independent")],
+            ),
+        )
+        ambiguity = self.write_script(
+            [
+                {
+                    "task_id": "unclear",
+                    "outcome": "ambiguity",
+                    "reason": "The plan names two incompatible output formats.",
+                }
+            ]
+        )
+
+        first = run_loop(
+            plan,
+            self.product,
+            FakeAdapter(ambiguity, plan),
+            holder="ambiguity-worker",
+            clock=lambda: 456.0,
+            id_source=lambda: "ambiguity",
+        )
+
+        self.assertEqual("awaiting-operator", first.status)
+        state = Store(plan.root).load()
+        unclear = state["tasks"][0]
+        self.assertEqual(
+            {"work": 0, "infra": 0, "diagnostic": 1},
+            unclear["attempts"],
+        )
+        self.assertTrue(unclear["parked"])
+        self.assertEqual("framework-rule", unclear["judgments"][0]["source"])
+        self.assertIn(
+            "two incompatible output formats",
+            state["outbox"][0]["blocked_on"],
+        )
+        self.assertEqual(
+            ["independent"],
+            [item["id"] for item in plan.ready("implementer")],
+        )
+
+        independent = self.write_script(
+            [
+                {
+                    "task_id": "independent",
+                    "commit_message": "Build independent work",
+                    "writes": {"independent.txt": "independent\n"},
+                }
+            ]
+        )
+        second = run_loop(
+            plan,
+            self.product,
+            FakeAdapter(independent, plan),
+            holder="independent-worker",
+        )
+        self.assertEqual("awaiting-operator", second.status)
+        self.assertEqual("green", plan.load()["tasks"][1]["verdict"])
+
+    def test_malformed_judge_output_downgrades_to_park_and_escalate(self) -> None:
+        class MalformedJudge:
+            def decide(self, judged_task, trigger, failure):
+                return {"decision": "try-again"}
+
+        script = self.write_script(
+            [
+                {
+                    "task_id": "wrong-task",
+                    "commit_message": "Never reached",
+                    "writes": {"wrong.txt": "wrong\n"},
+                }
+            ]
+        )
+        result = run_loop(
+            self.store,
+            self.product,
+            FakeAdapter(script, self.store),
+            holder="worker",
+            judge=MalformedJudge(),
+            work_attempt_limit=1,
+            clock=lambda: 789.0,
+            id_source=lambda: "malformed-judge",
+        )
+
+        self.assertEqual("awaiting-operator", result.status)
+        state = self.store.load()
+        self.assertTrue(state["tasks"][0]["parked"])
+        judgment = state["tasks"][0]["judgments"][0]
+        self.assertEqual("fallback", judgment["source"])
+        self.assertEqual("defer-to-operator", judgment["decision"])
+        self.assertIn("wrong fields", judgment["reason"])
+        self.assertEqual("esc-malformed-judge", state["outbox"][0]["id"])
+
+    def test_restart_routes_an_already_reached_retry_cap_before_dispatch(self) -> None:
+        for attempt in range(3):
+            lease = self.store.claim("first", f"worker-{attempt}")
+            self.store.apply(
+                {
+                    "type": "task-released",
+                    "task_id": "first",
+                    "holder": lease.holder,
+                    "lease_id": lease.lease_id,
+                    "attempt_type": "work",
+                    "reason": "same seeded failure",
+                }
+            )
+
+        class NoDispatchAdapter:
+            def dispatch(self, prompt, binding, sandbox, timeout):
+                raise AssertionError("retry-capped work was dispatched")
+
+        class ParkJudge:
+            def decide(self, judged_task, trigger, failure):
+                self.failure = failure
+                return {
+                    "schema_version": 1,
+                    "task_id": judged_task["id"],
+                    "trigger": trigger,
+                    "decision": "park",
+                    "reason": "Keep the bounded failure parked.",
+                }
+
+        judge = ParkJudge()
+        result = run_loop(
+            Store(self.store.root),
+            self.product,
+            NoDispatchAdapter(),
+            holder="resumed-worker",
+            judge=judge,
+            work_attempt_limit=3,
+        )
+
+        self.assertEqual("parked", result.status)
+        self.assertEqual("same seeded failure", judge.failure)
+        state = self.store.load()
+        self.assertTrue(state["tasks"][0]["parked"])
+        self.assertEqual([], state["outbox"])
+
     def test_bare_success_exit_without_result_artifact_is_red(self) -> None:
         plan = Store(self.root / "lying-flight")
         plan.create(initial_state("Build the toy"))

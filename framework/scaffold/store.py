@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -16,6 +17,8 @@ import tempfile
 import time
 from typing import Any
 import uuid
+
+from .judge import normalize_decision
 
 
 SCHEMA_VERSION = 1
@@ -66,6 +69,7 @@ def initial_state(goal: str, *, test_paths: list[str] | None = None) -> dict[str
         "test_paths": paths,
         "plan_digest": None,
         "tasks": [],
+        "outbox": [],
     }
 
 
@@ -386,6 +390,8 @@ class Store:
                 self._apply_task_verification(state, normalized)
             elif transition_type == "task-released":
                 _apply_task_released(state, normalized)
+            elif transition_type == "task-judged":
+                _apply_task_judged(state, normalized)
             else:
                 raise InvalidTransition(
                     f"unsupported transition type: {transition_type}"
@@ -572,6 +578,7 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("state must be an object")
     normalized = deepcopy(dict(state))
     normalized.setdefault("plan_digest", None)
+    normalized.setdefault("outbox", [])
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"state schema_version must be {SCHEMA_VERSION}")
     if not isinstance(normalized.get("goal"), str) or not normalized["goal"].strip():
@@ -589,6 +596,26 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("state tasks must be a list")
     normalized["tasks"] = [_normalize_task(task) for task in normalized["tasks"]]
     _validate_graph(normalized["tasks"])
+    if not isinstance(normalized.get("outbox"), list):
+        raise ValueError("state outbox must be a list")
+    normalized["outbox"] = [
+        _normalize_escalation(item) for item in normalized["outbox"]
+    ]
+    escalation_ids = [item["id"] for item in normalized["outbox"]]
+    if len(set(escalation_ids)) != len(escalation_ids):
+        raise ValueError("state outbox ids must be unique")
+    tasks_by_id = {task["id"]: task for task in normalized["tasks"]}
+    for escalation in normalized["outbox"]:
+        task = tasks_by_id.get(escalation["task_id"])
+        if task is None:
+            raise ValueError("state outbox names an unknown task")
+        if not any(
+            judgment["decision"] == "defer-to-operator"
+            and judgment["trigger"] == escalation["trigger"]
+            and judgment["observed_at"] == escalation["created_at"]
+            for judgment in task["judgments"]
+        ):
+            raise ValueError("state outbox lacks its matching task judgment")
     _canonical_json(normalized)
     return normalized
 
@@ -598,6 +625,8 @@ def _normalize_task(task: Any) -> dict[str, Any]:
         raise ValueError("each task must be an object")
     normalized = deepcopy(dict(task))
     normalized.setdefault("test_changes", False)
+    normalized.setdefault("parked", False)
+    normalized.setdefault("judgments", [])
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"task schema_version must be {SCHEMA_VERSION}")
     for field in ("id", "title", "role", "effort", "check"):
@@ -615,6 +644,18 @@ def _normalize_task(task: Any) -> dict[str, Any]:
         raise ValueError("task decisions must be a list of non-empty strings")
     if not isinstance(normalized.get("test_changes"), bool):
         raise ValueError("task test_changes must be a boolean")
+    if not isinstance(normalized.get("parked"), bool):
+        raise ValueError("task parked must be a boolean")
+    if not isinstance(normalized.get("judgments"), list):
+        raise ValueError("task judgments must be a list")
+    normalized["judgments"] = [
+        _normalize_recorded_judgment(item) for item in normalized["judgments"]
+    ]
+    if any(
+        judgment["task_id"] != normalized["id"]
+        for judgment in normalized["judgments"]
+    ):
+        raise ValueError("task judgment names a different task")
     attempts = normalized.get("attempts")
     if not isinstance(attempts, Mapping) or set(attempts) != {
         "work",
@@ -828,6 +869,7 @@ def _task_can_enter_frontier(
     if (
         task["completion"] != "pending"
         or task["verdict"] is not None
+        or task["parked"]
         or lineage["retired"]
         or lineage["revoked"]
         or lineage["superseded_by"] is not None
@@ -909,6 +951,169 @@ def _apply_task_released(
         raise InvalidTransition("released task is not leased by the holder")
     task["attempts"][attempt_type] += 1
     task["lease"] = None
+
+
+def _apply_task_judged(
+    state: dict[str, Any], transition: Mapping[str, Any]
+) -> None:
+    task_id = _required_text(transition, "task_id")
+    source = _required_text(transition, "source")
+    if source not in {"judge", "framework-rule", "fallback"}:
+        raise InvalidTransition("task judgment source is invalid")
+    observed_at = transition.get("observed_at")
+    if isinstance(observed_at, bool) or not isinstance(observed_at, (int, float)):
+        raise InvalidTransition("task judgment observed_at must be a number")
+    try:
+        decision = normalize_decision(
+            transition.get("decision"), task_id=task_id
+        )
+    except ValueError as error:
+        raise InvalidTransition(str(error)) from error
+    if source == "framework-rule" and (
+        decision["trigger"] != "ambiguity"
+        or decision["decision"] != "defer-to-operator"
+    ):
+        raise InvalidTransition(
+            "framework-rule judgments are reserved for ambiguity escalation"
+        )
+    if source == "fallback" and decision["decision"] != "defer-to-operator":
+        raise InvalidTransition("fallback judgments must defer to the operator")
+    task = _task_by_id(state, task_id)
+    if (
+        task["completion"] != "pending"
+        or task["verdict"] is not None
+        or task["lease"] is not None
+        or task["parked"]
+    ):
+        raise InvalidTransition("judged task is not unleased pending work")
+
+    escalation_value = transition.get("escalation")
+    if decision["decision"] == "defer-to-operator":
+        if escalation_value is None:
+            raise InvalidTransition(
+                "defer-to-operator requires an escalation record"
+            )
+        try:
+            escalation = _normalize_escalation(escalation_value)
+        except ValueError as error:
+            raise InvalidTransition(str(error)) from error
+        if (
+            escalation["task_id"] != task_id
+            or escalation["trigger"] != decision["trigger"]
+            or escalation["created_at"] != float(observed_at)
+        ):
+            raise InvalidTransition(
+                "escalation does not match the judged task and trigger"
+            )
+        if escalation["status"] != "open":
+            raise InvalidTransition("new escalation status must be open")
+        if any(item["id"] == escalation["id"] for item in state["outbox"]):
+            raise InvalidTransition("escalation id already exists")
+        state["outbox"].append(escalation)
+    elif escalation_value is not None:
+        raise InvalidTransition(
+            "only defer-to-operator may create an escalation record"
+        )
+
+    task["parked"] = True
+    task["judgments"].append(
+        {
+            **decision,
+            "source": source,
+            "observed_at": float(observed_at),
+        }
+    )
+
+
+def _normalize_recorded_judgment(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError("recorded judgment must be an object")
+    decision_fields = {
+        "schema_version",
+        "task_id",
+        "trigger",
+        "decision",
+        "reason",
+    }
+    if set(value) != decision_fields | {"source", "observed_at"}:
+        raise ValueError("recorded judgment has the wrong fields")
+    decision = normalize_decision(
+        {field: value[field] for field in decision_fields}
+    )
+    source = value["source"]
+    if source not in {"judge", "framework-rule", "fallback"}:
+        raise ValueError("recorded judgment source is invalid")
+    if source == "framework-rule" and (
+        decision["trigger"] != "ambiguity"
+        or decision["decision"] != "defer-to-operator"
+    ):
+        raise ValueError(
+            "framework-rule judgments are reserved for ambiguity escalation"
+        )
+    if source == "fallback" and decision["decision"] != "defer-to-operator":
+        raise ValueError("fallback judgments must defer to the operator")
+    observed_at = value["observed_at"]
+    if (
+        isinstance(observed_at, bool)
+        or not isinstance(observed_at, (int, float))
+        or not math.isfinite(observed_at)
+        or observed_at < 0
+    ):
+        raise ValueError("recorded judgment observed_at must be a number")
+    return {**decision, "source": source, "observed_at": float(observed_at)}
+
+
+def _normalize_escalation(value: Any) -> dict[str, Any]:
+    required = {
+        "id",
+        "task_id",
+        "trigger",
+        "blocked_on",
+        "proposed_action",
+        "effect",
+        "request",
+        "status",
+        "created_at",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("escalation record has the wrong fields")
+    normalized = deepcopy(dict(value))
+    for field in (
+        "id",
+        "task_id",
+        "trigger",
+        "blocked_on",
+        "proposed_action",
+        "effect",
+        "request",
+        "status",
+    ):
+        _required_text(normalized, field)
+    validate_task_id(normalized["task_id"])
+    if not re.fullmatch(r"esc-[a-z0-9][a-z0-9-]{0,119}", normalized["id"]):
+        raise ValueError("escalation id must be an esc- prefixed path-safe id")
+    if normalized["trigger"] not in {
+        "retry-cap",
+        "ambiguity",
+        "stall",
+        "identical-error",
+        "wall-clock-cap",
+    }:
+        raise ValueError("escalation trigger is outside the closed trigger enum")
+    if normalized["request"] != "veto-or-confirm":
+        raise ValueError("escalation request must be veto-or-confirm")
+    if normalized["status"] not in {"open", "resolved"}:
+        raise ValueError("escalation status must be open or resolved")
+    created_at = normalized["created_at"]
+    if (
+        isinstance(created_at, bool)
+        or not isinstance(created_at, (int, float))
+        or not math.isfinite(created_at)
+        or created_at < 0
+    ):
+        raise ValueError("escalation created_at must be a number")
+    normalized["created_at"] = float(created_at)
+    return normalized
 
 
 def _normalize_transition(transition: Mapping[str, Any]) -> dict[str, Any]:

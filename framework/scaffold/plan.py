@@ -191,6 +191,8 @@ def _plan_task(value: Any) -> dict[str, Any]:
         "attempts": {"work": 0, "infra": 0, "diagnostic": 0},
         "completion": "pending",
         "verdict": None,
+        "parked": False,
+        "judgments": [],
         "evidence": [],
         "verified_head": None,
         "lineage": {

@@ -22,17 +22,18 @@ CLAIM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "claim": {"const": "passes"},
+        "claim": {"enum": ["passes", "ambiguity"]},
         "candidate_head": {
-            "type": "string",
+            "type": ["string", "null"],
             "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
         },
         "artifacts": {
             "type": "array",
             "items": {"type": "string", "minLength": 1},
         },
+        "reason": {"type": ["string", "null"]},
     },
-    "required": ["claim", "candidate_head", "artifacts"],
+    "required": ["claim", "candidate_head", "artifacts", "reason"],
 }
 
 _SECRET_ENV_NAME = re.compile(
@@ -113,6 +114,7 @@ class ProcessAdapter(ABC):
         )
         exit_class = "worker-error"
         failure_class = "infra"
+        failure_reason: str | None = None
         try:
             with tempfile.TemporaryDirectory(prefix="scaffold-worker-") as temporary:
                 temporary_root = Path(temporary)
@@ -170,54 +172,61 @@ class ProcessAdapter(ABC):
                         raw_last_path=raw_last_path,
                     )
                     normalized = _normalize_claim(claim)
-                    candidate_head = normalized["candidate_head"]
-                    observed_head = _git(
-                        checkout, ("rev-parse", "HEAD"), timeout=timeout
-                    ).strip()
-                    if observed_head != candidate_head:
-                        raise ValueError("structured claim does not name checkout HEAD")
-                    if _git(checkout, ("status", "--porcelain"), timeout=timeout).strip():
-                        raise ValueError("worker checkout is dirty after claimed commit")
-                    _reject_candidate_secrets(
-                        checkout,
-                        base_head,
-                        candidate_head,
-                        parent_environment,
-                        timeout=timeout,
-                    )
-                    failure_class = "infra"
-                    _publish_candidate(
-                        product_root,
-                        checkout,
-                        base_head,
-                        candidate_head,
-                        timeout=timeout,
-                    )
-                    safe_claim = {
-                        "schema_version": SCHEMA_VERSION,
-                        "task_id": task_id,
-                        "holder": holder,
-                        "lease_id": lease_id,
-                        "claim": "passes",
-                        "candidate_head": candidate_head,
-                        "artifacts": [
-                            _redact(item, parent_environment)
-                            for item in normalized["artifacts"]
-                        ],
-                    }
-                    claim_path = result_root / "claim-source.json"
-                    claim_path.write_text(
-                        json.dumps(safe_claim, ensure_ascii=False, sort_keys=True) + "\n",
-                        encoding="utf-8",
-                    )
-                    self.store.file_claim(
-                        task_id,
-                        claim_path,
-                        reservation_seconds=reservation,
-                    )
-                    transcript["candidate_head"] = candidate_head
-                    transcript["artifacts"] = safe_claim["artifacts"]
-                    exit_class = "success"
+                    if normalized["claim"] == "ambiguity":
+                        failure_reason = _redact(
+                            normalized["reason"], parent_environment
+                        )
+                        transcript["reason"] = failure_reason
+                        exit_class = "ambiguity"
+                    else:
+                        candidate_head = normalized["candidate_head"]
+                        observed_head = _git(
+                            checkout, ("rev-parse", "HEAD"), timeout=timeout
+                        ).strip()
+                        if observed_head != candidate_head:
+                            raise ValueError("structured claim does not name checkout HEAD")
+                        if _git(checkout, ("status", "--porcelain"), timeout=timeout).strip():
+                            raise ValueError("worker checkout is dirty after claimed commit")
+                        _reject_candidate_secrets(
+                            checkout,
+                            base_head,
+                            candidate_head,
+                            parent_environment,
+                            timeout=timeout,
+                        )
+                        failure_class = "infra"
+                        _publish_candidate(
+                            product_root,
+                            checkout,
+                            base_head,
+                            candidate_head,
+                            timeout=timeout,
+                        )
+                        safe_claim = {
+                            "schema_version": SCHEMA_VERSION,
+                            "task_id": task_id,
+                            "holder": holder,
+                            "lease_id": lease_id,
+                            "claim": "passes",
+                            "candidate_head": candidate_head,
+                            "artifacts": [
+                                _redact(item, parent_environment)
+                                for item in normalized["artifacts"]
+                            ],
+                        }
+                        claim_path = result_root / "claim-source.json"
+                        claim_path.write_text(
+                            json.dumps(safe_claim, ensure_ascii=False, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                        self.store.file_claim(
+                            task_id,
+                            claim_path,
+                            reservation_seconds=reservation,
+                        )
+                        transcript["candidate_head"] = candidate_head
+                        transcript["artifacts"] = safe_claim["artifacts"]
+                        exit_class = "success"
         except FileNotFoundError as error:
             exit_class = "infra"
             transcript["error"] = f"cannot launch worker CLI: {error}"
@@ -252,6 +261,7 @@ class ProcessAdapter(ABC):
             transcript_path,
             last_message_path,
             self.binding.label,
+            failure_reason,
         )
 
     @abstractmethod
@@ -426,14 +436,23 @@ def _reject_candidate_secrets(
 
 
 def _normalize_claim(value: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != {
-        "claim",
-        "candidate_head",
-        "artifacts",
-    }:
+    if not isinstance(value, dict):
+        raise ValueError("structured claim must be an object")
+    if set(value) != {"claim", "candidate_head", "artifacts", "reason"}:
         raise ValueError("structured claim has unexpected fields")
+    if value["claim"] == "ambiguity":
+        reason = value["reason"]
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("structured ambiguity reason must be non-empty text")
+        if value["candidate_head"] is not None or value["artifacts"] != []:
+            raise ValueError(
+                "structured ambiguity cannot name a candidate or artifacts"
+            )
+        return {"claim": "ambiguity", "reason": reason}
     if value["claim"] != "passes":
         raise ValueError("structured claim must say passes")
+    if value["reason"] is not None:
+        raise ValueError("passing structured claim cannot include a reason")
     candidate_head = value["candidate_head"]
     if not isinstance(candidate_head, str) or not re.fullmatch(
         r"(?:[0-9a-f]{40}|[0-9a-f]{64})", candidate_head
@@ -456,6 +475,7 @@ def _normalize_claim(value: Mapping[str, Any]) -> dict[str, Any]:
         "claim": "passes",
         "candidate_head": candidate_head,
         "artifacts": list(artifacts),
+        "reason": None,
     }
 
 

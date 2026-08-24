@@ -50,6 +50,7 @@ class FakeAdapter:
             "sandbox": sandbox,
             "prompt_bytes": len(prompt.encode("utf-8")),
         }
+        failure_reason: str | None = None
         try:
             if self._position >= len(self._steps):
                 raise ValueError("fake script has no remaining step")
@@ -59,59 +60,67 @@ class FakeAdapter:
                 raise ValueError(
                     f"fake step expected {step['task_id']}, received {task_id}"
                 )
-            for relative_name, content in step["writes"].items():
-                destination = _safe_product_path(product_root, relative_name)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_text(content, encoding="utf-8")
-            _git(
-                product_root,
-                ["add", "--all"],
-                timeout=timeout,
-            )
-            _git(
-                product_root,
-                ["commit", "--no-gpg-sign", "-m", step["commit_message"]],
-                timeout=timeout,
-            )
-            candidate_head = _git(
-                product_root,
-                ["rev-parse", "HEAD"],
-                timeout=timeout,
-            ).strip()
-            if step["pause_seconds"]:
-                time.sleep(step["pause_seconds"])
-            evidence_source = result_root / "claim-source.json"
-            evidence_source.write_text(
-                json.dumps(
+            if step["outcome"] == "ambiguity":
+                failure_reason = step["reason"]
+                transcript.update(
+                    {"exit_class": "ambiguity", "reason": failure_reason}
+                )
+                message = f"reported ambiguity for {task_id}: {failure_reason}\n"
+                exit_class = "ambiguity"
+            else:
+                for relative_name, content in step["writes"].items():
+                    destination = _safe_product_path(product_root, relative_name)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text(content, encoding="utf-8")
+                _git(
+                    product_root,
+                    ["add", "--all"],
+                    timeout=timeout,
+                )
+                _git(
+                    product_root,
+                    ["commit", "--no-gpg-sign", "-m", step["commit_message"]],
+                    timeout=timeout,
+                )
+                candidate_head = _git(
+                    product_root,
+                    ["rev-parse", "HEAD"],
+                    timeout=timeout,
+                ).strip()
+                if step["pause_seconds"]:
+                    time.sleep(step["pause_seconds"])
+                evidence_source = result_root / "claim-source.json"
+                evidence_source.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "task_id": task_id,
+                            "holder": holder,
+                            "lease_id": lease_id,
+                            "claim": "passes",
+                            "candidate_head": candidate_head,
+                            "artifacts": step["artifacts"],
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                self.store.file_claim(
+                    task_id,
+                    evidence_source,
+                    reservation_seconds=claim_reservation_seconds,
+                )
+                transcript.update(
                     {
-                        "schema_version": SCHEMA_VERSION,
-                        "task_id": task_id,
-                        "holder": holder,
-                        "lease_id": lease_id,
-                        "claim": "passes",
+                        "exit_class": "success",
                         "candidate_head": candidate_head,
                         "artifacts": step["artifacts"],
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
+                    }
                 )
-                + "\n",
-                encoding="utf-8",
-            )
-            self.store.file_claim(
-                task_id,
-                evidence_source,
-                reservation_seconds=claim_reservation_seconds,
-            )
-            transcript.update(
-                {
-                    "exit_class": "success",
-                    "candidate_head": candidate_head,
-                    "artifacts": step["artifacts"],
-                }
-            )
-            message = f"filed passing claim for {task_id} at {candidate_head}\n"
-            exit_class = "success"
+                message = f"filed passing claim for {task_id} at {candidate_head}\n"
+                exit_class = "success"
         except (OSError, subprocess.SubprocessError, StoreError, ValueError) as error:
             transcript.update({"exit_class": "worker-error", "error": str(error)})
             message = f"fake worker failed for {task_id}: {error}\n"
@@ -123,7 +132,12 @@ class FakeAdapter:
             encoding="utf-8",
         )
         last_message_path.write_text(message, encoding="utf-8")
-        return DispatchResult(exit_class, transcript_path, last_message_path)
+        return DispatchResult(
+            exit_class,
+            transcript_path,
+            last_message_path,
+            failure_reason=failure_reason,
+        )
 
     def _load_steps(self) -> list[dict[str, Any]]:
         try:
@@ -139,10 +153,24 @@ def _normalize_step(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("each fake adapter step must be an object")
     task_id = _required_text(value, "task_id")
-    commit_message = _required_text(value, "commit_message")
-    writes = value.get("writes")
-    if not isinstance(writes, dict) or not writes:
-        raise ValueError(f"fake step {task_id} writes must be a non-empty object")
+    outcome = value.get("outcome", "passes")
+    if outcome not in {"passes", "ambiguity"}:
+        raise ValueError("fake step outcome must be passes or ambiguity")
+    commit_message = value.get("commit_message", "")
+    writes = value.get("writes", {})
+    if not isinstance(writes, dict):
+        raise ValueError("fake step writes must be an object")
+    if outcome == "passes" and (
+        not isinstance(commit_message, str)
+        or not commit_message
+        or not isinstance(writes, dict)
+        or not writes
+    ):
+        raise ValueError(
+            f"passing fake step {task_id} requires a commit message and writes"
+        )
+    if outcome == "ambiguity" and (commit_message or writes):
+        raise ValueError("ambiguous fake steps cannot mutate the product")
     if any(
         not isinstance(path, str)
         or not path
@@ -162,12 +190,19 @@ def _normalize_step(value: Any) -> dict[str, Any]:
         or pause_seconds < 0
     ):
         raise ValueError("fake pause_seconds must be a non-negative number")
+    reason = value.get("reason", "")
+    if outcome == "ambiguity" and (
+        not isinstance(reason, str) or not reason.strip()
+    ):
+        raise ValueError("ambiguous fake steps require a non-empty reason")
     return {
         "task_id": task_id,
+        "outcome": outcome,
         "commit_message": commit_message,
         "writes": dict(writes),
         "artifacts": list(artifacts),
         "pause_seconds": float(pause_seconds),
+        "reason": reason,
     }
 
 

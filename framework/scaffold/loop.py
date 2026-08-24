@@ -7,9 +7,12 @@ from dataclasses import dataclass
 import hashlib
 from pathlib import Path
 import subprocess
-from typing import Any, Protocol
+import time
+from typing import Any, Callable, Protocol
+import uuid
 
 from .adapters.base import DispatchResult
+from .judge import Judge, normalize_decision
 from .prompt import assemble_prompt
 from .store import InvalidTransition, Lease, Store
 from .verify import verify
@@ -69,8 +72,19 @@ def run_loop(
     durable_paths: Sequence[str | Path] = (),
     binding_label: str = "worker",
     lifecycle: Lifecycle | None = None,
+    judge: Judge | None = None,
+    work_attempt_limit: int = 3,
+    clock: Callable[[], float] | None = None,
+    id_source: Callable[[], str] | None = None,
 ) -> RunResult:
     """Pull and complete frontier tasks until done, blocked, or one failure."""
+
+    if isinstance(work_attempt_limit, bool) or not isinstance(
+        work_attempt_limit, int
+    ) or work_attempt_limit <= 0:
+        raise ValueError("work_attempt_limit must be a positive integer")
+    observed_time = clock or time.time
+    next_id = id_source or (lambda: uuid.uuid4().hex)
 
     product = Path(product_root).resolve()
     completed: list[str] = []
@@ -98,6 +112,15 @@ def run_loop(
                     tuple(completed),
                     f"frontier has no task for profile {profile}",
                 )
+            open_escalations = [
+                item for item in state["outbox"] if item["status"] == "open"
+            ]
+            if open_escalations:
+                return RunResult(
+                    "awaiting-operator",
+                    tuple(completed),
+                    f"{len(open_escalations)} operator answer(s) are needed",
+                )
             return RunResult(
                 "blocked",
                 tuple(completed),
@@ -105,6 +128,17 @@ def run_loop(
             )
 
         task = frontier[0]
+        if task["attempts"]["work"] >= work_attempt_limit:
+            return _route_judgment(
+                store,
+                task,
+                trigger="retry-cap",
+                failure=_latest_failure_reason(store, task["id"]),
+                completed=completed,
+                judge=judge,
+                clock=observed_time,
+                id_source=next_id,
+            )
         segment += 1
         try:
             base_head = _git(product, ["rev-parse", "HEAD"]).strip()
@@ -160,18 +194,23 @@ def run_loop(
                 _restore_product(product, base_head)
             except ValueError as error:
                 return RunResult("broken", tuple(completed), str(error))
-            store.apply(
+            attempt_type = (
+                "diagnostic"
+                if result.exit_class == "ambiguity"
+                else (
+                    "infra"
+                    if result.exit_class in {"infra", "killed"}
+                    else "work"
+                )
+            )
+            released_state = store.apply(
                 {
                     "type": "task-released",
                     "task_id": task["id"],
                     "holder": holder,
                     "lease_id": lease.lease_id,
-                    "attempt_type": (
-                        "infra"
-                        if result.exit_class in {"infra", "killed"}
-                        else "work"
-                    ),
-                    "reason": result.exit_class,
+                    "attempt_type": attempt_type,
+                    "reason": result.failure_reason or result.exit_class,
                 }
             )
             if lifecycle is not None:
@@ -181,6 +220,28 @@ def run_loop(
                 f"segment {segment}: {task['id']} -> {active_binding}; worker "
                 f"{result.exit_class}; slice ended",
             )
+            trigger = None
+            if result.exit_class == "ambiguity":
+                trigger = "ambiguity"
+            else:
+                released_task = next(
+                    item
+                    for item in released_state["tasks"]
+                    if item["id"] == task["id"]
+                )
+                if released_task["attempts"]["work"] >= work_attempt_limit:
+                    trigger = "retry-cap"
+            if trigger is not None:
+                return _route_judgment(
+                    store,
+                    task,
+                    trigger=trigger,
+                    failure=result.failure_reason or result.exit_class,
+                    completed=completed,
+                    judge=judge,
+                    clock=observed_time,
+                    id_source=next_id,
+                )
             return RunResult(
                 "failed",
                 tuple(completed),
@@ -326,6 +387,109 @@ def run_loop(
             f"segment {segment}: {task['id']} -> {active_binding}; flipped; "
             "verify green",
         )
+
+
+def _route_judgment(
+    store: Store,
+    task: Mapping[str, Any],
+    *,
+    trigger: str,
+    failure: str,
+    completed: list[str],
+    judge: Judge | None,
+    clock: Callable[[], float],
+    id_source: Callable[[], str],
+) -> RunResult:
+    if trigger == "ambiguity":
+        source = "framework-rule"
+        decision = {
+            "schema_version": 1,
+            "task_id": task["id"],
+            "trigger": trigger,
+            "decision": "defer-to-operator",
+            "reason": "The requirement is ambiguous, so another attempt is unsafe.",
+        }
+    else:
+        try:
+            if judge is None:
+                raise ValueError("no judge is configured")
+            decision = normalize_decision(
+                judge.decide(task, trigger, failure),
+                task_id=task["id"],
+                trigger=trigger,
+            )
+            source = "judge"
+        except Exception as error:
+            source = "fallback"
+            decision = {
+                "schema_version": 1,
+                "task_id": task["id"],
+                "trigger": trigger,
+                "decision": "defer-to-operator",
+                "reason": f"The automatic decision was unavailable: {error}",
+            }
+
+    observed_at = float(clock())
+    transition: dict[str, Any] = {
+        "type": "task-judged",
+        "task_id": task["id"],
+        "source": source,
+        "observed_at": observed_at,
+        "decision": decision,
+    }
+    if decision["decision"] == "defer-to-operator":
+        raw_id = id_source()
+        if not isinstance(raw_id, str):
+            raise ValueError("escalation id source must return text")
+        escalation_id = "esc-" + raw_id.casefold()
+        transition["escalation"] = {
+            "id": escalation_id,
+            "task_id": task["id"],
+            "trigger": trigger,
+            "blocked_on": (
+                f"Work on {task['title']} stopped because {failure}."
+            ),
+            "proposed_action": (
+                "Clarify the requirement before trying again."
+                if trigger == "ambiguity"
+                else "Confirm whether to rewrite, reassign, split, or stop this work."
+            ),
+            "effect": (
+                "This work stays paused; other independent work can continue."
+            ),
+            "request": "veto-or-confirm",
+            "status": "open",
+            "created_at": observed_at,
+        }
+    store.apply(transition)
+    _event(
+        store,
+        f"{task['id']}: {trigger} -> {decision['decision']}; task parked",
+    )
+    if decision["decision"] == "defer-to-operator":
+        return RunResult(
+            "awaiting-operator",
+            tuple(completed),
+            f"operator answer needed for {task['title']}",
+        )
+    return RunResult(
+        "parked",
+        tuple(completed),
+        f"{task['title']} was parked after {trigger}",
+    )
+
+
+def _latest_failure_reason(store: Store, task_id: str) -> str:
+    for entry in reversed(store.read_journal()):
+        transition = entry["transition"]
+        if (
+            transition.get("type") == "task-released"
+            and transition.get("task_id") == task_id
+        ):
+            reason = transition.get("reason")
+            if isinstance(reason, str) and reason:
+                return reason
+    return "the work attempt limit was reached"
 
 
 def _git(root: Path, arguments: list[str]) -> str:
