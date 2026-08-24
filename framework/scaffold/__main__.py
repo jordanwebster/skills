@@ -14,6 +14,7 @@ import uuid
 
 from . import __version__
 from .adapters.fake import FakeAdapter
+from .adapters.judge import RosterJudge
 from .adapters.roster import RosterAdapter, RosterError
 from .loop import run_loop
 from .plan import import_plan, retained_plan_path
@@ -166,10 +167,12 @@ def _run(parsed: argparse.Namespace) -> int:
             if parsed.script is None:
                 raise ValueError("the fake adapter requires --script")
             adapter = FakeAdapter(parsed.script, store)
+            judge = None
         else:
             if parsed.script is not None:
                 raise ValueError("the roster adapter does not accept --script")
             adapter = RosterAdapter(store, parsed.roster)
+            judge = RosterJudge(store, adapter.roster)
     except (RosterError, ValueError) as error:
         print(f"cannot run: {error}")
         return 1
@@ -194,6 +197,7 @@ def _run(parsed: argparse.Namespace) -> int:
                     durable_paths=(plan_path,),
                     binding_label=parsed.adapter,
                     lifecycle=runtime,
+                    judge=judge,
                 )
             except StopSignal:
                 runtime.finish("stopped", "driver was stopped")

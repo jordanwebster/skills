@@ -220,21 +220,21 @@ def run_loop(
                 f"segment {segment}: {task['id']} -> {active_binding}; worker "
                 f"{result.exit_class}; slice ended",
             )
+            released_task = next(
+                item
+                for item in released_state["tasks"]
+                if item["id"] == task["id"]
+            )
             trigger = None
             if result.exit_class == "ambiguity":
                 trigger = "ambiguity"
             else:
-                released_task = next(
-                    item
-                    for item in released_state["tasks"]
-                    if item["id"] == task["id"]
-                )
                 if released_task["attempts"]["work"] >= work_attempt_limit:
                     trigger = "retry-cap"
             if trigger is not None:
                 return _route_judgment(
                     store,
-                    task,
+                    released_task,
                     trigger=trigger,
                     failure=result.failure_reason or result.exit_class,
                     completed=completed,
@@ -450,9 +450,11 @@ def _route_judgment(
                 f"Work on {task['title']} stopped because {failure}."
             ),
             "proposed_action": (
-                "Clarify the requirement before trying again."
+                "Return the conflicting requirement for clarification and keep "
+                "this work paused meanwhile."
                 if trigger == "ambiguity"
-                else "Confirm whether to rewrite, reassign, split, or stop this work."
+                else "Return this work to planning for a revised approach and keep "
+                "it paused until that revision is confirmed."
             ),
             "effect": (
                 "This work stays paused; other independent work can continue."

@@ -88,6 +88,15 @@ class Roster:
             effort_fallback=effort_fallback,
         )
 
+    def resolve_default(self, role: str) -> ResolvedBinding:
+        """Resolve a role at the roster-owned effort for an unplanned job."""
+
+        if not isinstance(role, str) or not role:
+            raise RosterError("role must be a non-empty string")
+        used_default = role not in self._bindings
+        selected = self._bindings["default" if used_default else role]
+        return self.resolve(role, selected["effort"])
+
 
 class RosterAdapter:
     """Dispatch through the vendor named by a mechanically resolved roster row."""

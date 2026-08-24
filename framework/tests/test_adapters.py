@@ -72,6 +72,11 @@ effort_arg = "-c model_reasoning_effort=<effort>"
             self.assertTrue(fallback.used_default)
             self.assertTrue(fallback.effort_fallback)
 
+            judge = roster.resolve_default("judge")
+            self.assertEqual("claude/opus/high", judge.label)
+            self.assertTrue(judge.used_default)
+            self.assertFalse(judge.effort_fallback)
+
     def test_roster_requires_default_and_rejects_unknown_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             roster_path = Path(temporary) / "roster.toml"
@@ -301,6 +306,64 @@ class RealAdapterFlightTests(unittest.TestCase):
         self.assertNotIn(SECRET, retained)
         self.assertIn("<redacted>", retained)
 
+    def test_codex_cli_retry_cap_dispatches_roster_judge(self) -> None:
+        self._assert_cli_retry_cap_judge("codex")
+
+    def test_claude_cli_retry_cap_dispatches_roster_judge(self) -> None:
+        self._assert_cli_retry_cap_judge("claude")
+
+    def _assert_cli_retry_cap_judge(self, vendor: str) -> None:
+        roster_path = self._write_roster(vendor)
+        outputs: list[str] = []
+        auth_name = "OPENAI_API_KEY" if vendor == "codex" else "ANTHROPIC_API_KEY"
+        with patch.dict(
+            os.environ,
+            {"SCAFFOLD_FIXTURE_MODE": "worker-error", auth_name: SECRET},
+        ):
+            for _ in range(3):
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    return_code = main(
+                        [
+                            "run",
+                            str(self.workspace),
+                            "--adapter",
+                            "roster",
+                            "--roster",
+                            str(roster_path),
+                            "--holder",
+                            "fixture-worker",
+                        ]
+                    )
+                self.assertEqual(1, return_code)
+                outputs.append(output.getvalue())
+
+        self.assertIn("parked", outputs[-1])
+        task = self.store.load()["tasks"][0]
+        self.assertEqual(3, task["attempts"]["work"])
+        self.assertTrue(task["parked"])
+        self.assertEqual("judge", task["judgments"][0]["source"])
+        self.assertEqual("park", task["judgments"][0]["decision"])
+        self.assertEqual([], self.store.load()["outbox"])
+        judge_transcript = json.loads(
+            (
+                self.workspace
+                / "adapter-results"
+                / "judge"
+                / "build-retry-cap"
+                / "transcript.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual("success", judge_transcript["exit_class"])
+        self.assertEqual("read-only", judge_transcript["sandbox"])
+        retained = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in self.workspace.rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn(SECRET, retained)
+        self.assertIn("<redacted>", task["judgments"][0]["reason"])
+
     def test_roster_arguments_cannot_override_vendor_sandbox(self) -> None:
         roster_path = self._write_roster("codex")
         source = roster_path.read_text(encoding="utf-8").replace(
@@ -502,16 +565,21 @@ class RealAdapterFlightTests(unittest.TestCase):
 
             vendor = Path(sys.argv[0]).name
             prompt = sys.stdin.read()
-            if "structured claim" not in prompt:
+            is_judge = "ephemeral failure judge" in prompt
+            if not is_judge and "structured claim" not in prompt:
                 print("missing structured-claim brief", file=sys.stderr)
                 raise SystemExit(2)
             if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "quota":
                 print("quota exceeded", file=sys.stderr)
                 raise SystemExit(1)
-            if Path(".scaffolding").exists() or Path("control-alias").exists():
+            if not is_judge and (
+                Path(".scaffolding").exists() or Path("control-alias").exists()
+            ):
                 print("worker could reach framework control state", file=sys.stderr)
                 raise SystemExit(3)
-            if subprocess.run(["git", "remote"], check=True, capture_output=True, text=True).stdout.strip():
+            if not is_judge and subprocess.run(
+                ["git", "remote"], check=True, capture_output=True, text=True
+            ).stdout.strip():
                 print("worker clone retained a source remote", file=sys.stderr)
                 raise SystemExit(5)
             if "M4_TEST_API_KEY" in os.environ:
@@ -523,6 +591,34 @@ class RealAdapterFlightTests(unittest.TestCase):
                 if not inherited or Path(inherited).resolve() != working_directory:
                     print(f"{{directory_name}} disclosed the source checkout", file=sys.stderr)
                     raise SystemExit(7)
+            if is_judge:
+                if "compiler rejected fixture syntax" not in prompt:
+                    print("judge omitted the concrete worker failure", file=sys.stderr)
+                    raise SystemExit(8)
+                if '"work": 3' not in prompt:
+                    print("judge received a stale attempt count", file=sys.stderr)
+                    raise SystemExit(9)
+                decision = {{
+                    "schema_version": 1,
+                    "task_id": "build",
+                    "trigger": "retry-cap",
+                    "decision": "park",
+                    "reason": (
+                        "The repeated compiler failure needs a changed brief: "
+                        + os.environ.get("OPENAI_API_KEY", "")
+                        + os.environ.get("ANTHROPIC_API_KEY", "")
+                    ),
+                }}
+                if vendor == "codex":
+                    output_path = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+                    output_path.write_text(json.dumps(decision) + "\\n")
+                    print(json.dumps({{"type": "result"}}))
+                elif vendor == "claude":
+                    print(json.dumps({{"type": "result", "structured_output": decision}}))
+                raise SystemExit(0)
+            if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "worker-error":
+                print("compiler rejected fixture syntax", file=sys.stderr)
+                raise SystemExit(2)
             if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "ambiguity":
                 claim = {{
                     "claim": "ambiguity",

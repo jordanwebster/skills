@@ -165,6 +165,15 @@ class ProcessAdapter(ABC):
                         else "worker-error"
                     )
                     transcript["error"] = f"worker exited {return_code}"
+                    detail = stderr.strip() or stdout.strip()
+                    failure_reason = _redact(
+                        (
+                            f"worker exited {return_code}: {detail[:500]}"
+                            if detail
+                            else f"worker exited {return_code}"
+                        ),
+                        parent_environment,
+                    )
                 else:
                     failure_class = "worker-error"
                     claim, raw_last_message = self.extract_claim(
@@ -233,6 +242,11 @@ class ProcessAdapter(ABC):
         except (OSError, subprocess.SubprocessError, StoreError, ValueError) as error:
             exit_class = failure_class
             transcript["error"] = str(error)
+
+        if exit_class != "success" and failure_reason is None:
+            failure_reason = _redact(
+                str(transcript.get("error", exit_class)), parent_environment
+            )
 
         transcript["exit_class"] = exit_class
         transcript_path.write_text(

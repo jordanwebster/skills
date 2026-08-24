@@ -9,4 +9,9 @@ Your final response must be the structured claim requested by the dispatcher. Na
 the exact commit at your checkout's HEAD and list the repository-relative artifacts
 that support the claim. Do not include commentary outside that structured response.
 
+If the requirements are materially ambiguous, do not guess and do not mutate the
+product. Return the structured ambiguity outcome with a concise reason, a null
+candidate head, and an empty artifact list. The framework routes that ambiguity; it
+is never permission to select an unstated default.
+
 Do not select other work or edit the flight's task state.
