@@ -13,6 +13,9 @@ class CodexAdapter(ProcessAdapter):
     """Invoke `codex exec` with a framework-owned sandbox and claim schema."""
 
     adapter_name = "codex"
+    auth_environment_names = frozenset(
+        {"AZURE_OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_API_KEY"}
+    )
 
     def command(
         self,
@@ -34,13 +37,14 @@ class CodexAdapter(ProcessAdapter):
             )
         return [
             self.binding.cli,
+            "-a",
+            "never",
             *arguments,
             "--model",
             self.binding.model,
             *effort_args,
             "--sandbox",
             "workspace-write",
-            "--approve-for-me",
             "--ignore-user-config",
             "-c",
             "shell_environment_policy.inherit=core",

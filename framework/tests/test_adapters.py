@@ -6,13 +6,16 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest.mock import patch
 
 from scaffold.__main__ import _init, main
 from scaffold.adapters.roster import Roster, RosterAdapter, RosterError
+from scaffold.adapters.process import _run_process
 from scaffold.loop import run_loop
 from scaffold.plan import import_plan, retained_plan_path
 from scaffold.store import Store
@@ -86,6 +89,60 @@ effort_arg = "-c model_reasoning_effort=<effort>"
             with self.assertRaisesRegex(RosterError, "unknown fields"):
                 Roster(roster_path)
 
+
+class ProcessGroupTests(unittest.TestCase):
+    def test_descendants_are_stopped_after_success_and_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            child = (
+                "import signal,sys,time; from pathlib import Path; "
+                "signal.signal(signal.SIGTERM, signal.SIG_IGN); p=Path(sys.argv[1]); "
+                "i=0; p.write_text('ready'); "
+                "exec(\"while True:\\n i += 1\\n p.write_text(str(i))\\n time.sleep(.02)\")"
+            )
+            for name, parent_tail, timeout, expected_timeout in (
+                (
+                    "success",
+                    "while not marker.exists():\n time.sleep(.01)",
+                    3.0,
+                    False,
+                ),
+                (
+                    "timeout",
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                    "while True:\n time.sleep(1)",
+                    0.2,
+                    True,
+                ),
+            ):
+                with self.subTest(name=name):
+                    marker = root / f"{name}.txt"
+                    stderr_path = root / f"{name}.stderr"
+                    parent = (
+                        "import signal,subprocess,sys,time; from pathlib import Path; "
+                        "marker=Path(sys.argv[1]); "
+                        f"subprocess.Popen([sys.executable, '-c', {child!r}, str(marker)]); "
+                        f"exec({parent_tail!r})"
+                    )
+                    return_code, timed_out = _run_process(
+                        [sys.executable, "-c", parent, str(marker)],
+                        prompt="probe",
+                        cwd=root,
+                        environment=os.environ.copy(),
+                        stdout_path=root / f"{name}.stdout",
+                        stderr_path=stderr_path,
+                        timeout=timeout,
+                    )
+                    self.assertEqual(expected_timeout, timed_out)
+                    self.assertTrue(
+                        marker.is_file(),
+                        stderr_path.read_text(encoding="utf-8"),
+                    )
+                    stopped_value = marker.read_text(encoding="utf-8")
+                    time.sleep(0.1)
+                    self.assertEqual(
+                        stopped_value, marker.read_text(encoding="utf-8")
+                    )
 
 class RealAdapterFlightTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -234,7 +291,37 @@ class RealAdapterFlightTests(unittest.TestCase):
             )
         )
         self.assertIn("must be exactly", transcript["error"])
+        task = self.store.load()["tasks"][0]
+        self.assertEqual(1, task["attempts"]["infra"])
+        self.assertEqual(0, task["attempts"]["work"])
         self.assertEqual(self.base_head, git(self.product, "rev-parse", "HEAD"))
+
+    def test_candidate_containing_auth_secret_is_not_published(self) -> None:
+        roster_path = self._write_roster("codex")
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": SECRET, "SCAFFOLD_FIXTURE_MODE": "commit-secret"},
+        ):
+            result = run_loop(
+                self.store,
+                self.product,
+                RosterAdapter(self.store, roster_path),
+                holder="fixture-worker",
+                dispatch_timeout=5,
+                durable_paths=(retained_plan_path(self.store),),
+            )
+
+        self.assertEqual("failed", result.status)
+        self.assertEqual(self.base_head, git(self.product, "rev-parse", "HEAD"))
+        task = self.store.load()["tasks"][0]
+        self.assertEqual(1, task["attempts"]["work"])
+        retained = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (self.workspace / "adapter-results").rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn(SECRET, retained)
+        self.assertIn("candidate contains a sensitive value", retained)
 
     def _assert_vendor_flight(self, vendor: str) -> None:
         roster_path = self._write_roster(vendor)
@@ -276,6 +363,7 @@ class RealAdapterFlightTests(unittest.TestCase):
             self.assertIn("workspace-write", command)
             self.assertIn("--output-schema", command)
             self.assertIn("--ignore-user-config", command)
+            self.assertEqual(["-a", "never", "exec"], command[1:4])
         else:
             self.assertIn("--json-schema", command)
             self.assertIn("--setting-sources", command)
@@ -330,7 +418,16 @@ class RealAdapterFlightTests(unittest.TestCase):
             if Path(".scaffolding").exists() or Path("control-alias").exists():
                 print("worker could reach framework control state", file=sys.stderr)
                 raise SystemExit(3)
-            Path("artifact.txt").write_text("built by " + vendor + "\\n")
+            if subprocess.run(["git", "remote"], check=True, capture_output=True, text=True).stdout.strip():
+                print("worker clone retained a source remote", file=sys.stderr)
+                raise SystemExit(5)
+            if "M4_TEST_API_KEY" in os.environ:
+                print("worker inherited an unrelated secret", file=sys.stderr)
+                raise SystemExit(6)
+            content = "built by " + vendor + "\\n"
+            if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "commit-secret":
+                content = os.environ["OPENAI_API_KEY"] + "\\n"
+            Path("artifact.txt").write_text(content)
             subprocess.run(["git", "config", "user.name", "Fixture CLI"], check=True)
             subprocess.run(["git", "config", "user.email", "fixture@example.invalid"], check=True)
             subprocess.run(["git", "add", "artifact.txt"], check=True)

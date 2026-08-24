@@ -13,6 +13,15 @@ class ClaudeAdapter(ProcessAdapter):
     """Invoke Claude in print mode with an invocation-scoped sandbox policy."""
 
     adapter_name = "claude"
+    auth_environment_names = frozenset(
+        {
+            "ANTHROPIC_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        }
+    )
 
     def command(
         self,

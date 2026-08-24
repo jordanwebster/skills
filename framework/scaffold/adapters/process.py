@@ -11,6 +11,7 @@ import re
 import signal
 import subprocess
 import tempfile
+import time
 from typing import Any
 
 from .base import DispatchResult
@@ -42,13 +43,23 @@ _KNOWN_SECRET_PATTERNS = (
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}\b"),
     re.compile(r"(?i)(authorization\s*:\s*(?:bearer|basic)\s+)\S+"),
 )
-_QUOTA_MARKERS = (
+_INFRA_MARKERS = (
     "quota",
     "rate limit",
     "rate_limit",
     "overloaded",
     "capacity",
     "too many requests",
+    "authentication",
+    "not authenticated",
+    "not logged in",
+    "please log in",
+    "network error",
+    "connection refused",
+    "connection reset",
+    "could not resolve",
+    "unexpected argument",
+    "unknown option",
 )
 
 
@@ -56,6 +67,7 @@ class ProcessAdapter(ABC):
     """Run a vendor CLI in a control-state-free clone and import its claim."""
 
     adapter_name: str
+    auth_environment_names: frozenset[str] = frozenset()
 
     def __init__(self, store: Store, resolved_binding: Any):
         self.store = store
@@ -95,8 +107,12 @@ class ProcessAdapter(ABC):
             "prompt_bytes": len(prompt.encode("utf-8")),
         }
         raw_last_message = ""
-        environment = os.environ.copy()
+        parent_environment = os.environ.copy()
+        environment = _worker_environment(
+            parent_environment, self.auth_environment_names
+        )
         exit_class = "worker-error"
+        failure_class = "infra"
         try:
             with tempfile.TemporaryDirectory(prefix="scaffold-worker-") as temporary:
                 temporary_root = Path(temporary)
@@ -115,6 +131,7 @@ class ProcessAdapter(ABC):
                     timeout=timeout,
                 )
                 _git(checkout, ("checkout", "--quiet", "--detach", base_head), timeout=timeout)
+                _git(checkout, ("remote", "remove", "origin"), timeout=timeout)
                 command = self.command(
                     checkout=checkout,
                     schema_path=schema_path,
@@ -142,11 +159,12 @@ class ProcessAdapter(ABC):
                     combined = f"{stdout}\n{stderr}".casefold()
                     exit_class = (
                         "infra"
-                        if any(marker in combined for marker in _QUOTA_MARKERS)
+                        if any(marker in combined for marker in _INFRA_MARKERS)
                         else "worker-error"
                     )
                     transcript["error"] = f"worker exited {return_code}"
                 else:
+                    failure_class = "worker-error"
                     claim, raw_last_message = self.extract_claim(
                         stdout=stdout,
                         raw_last_path=raw_last_path,
@@ -160,6 +178,14 @@ class ProcessAdapter(ABC):
                         raise ValueError("structured claim does not name checkout HEAD")
                     if _git(checkout, ("status", "--porcelain"), timeout=timeout).strip():
                         raise ValueError("worker checkout is dirty after claimed commit")
+                    _reject_candidate_secrets(
+                        checkout,
+                        base_head,
+                        candidate_head,
+                        parent_environment,
+                        timeout=timeout,
+                    )
+                    failure_class = "infra"
                     _publish_candidate(
                         product_root,
                         checkout,
@@ -175,7 +201,7 @@ class ProcessAdapter(ABC):
                         "claim": "passes",
                         "candidate_head": candidate_head,
                         "artifacts": [
-                            _redact(item, environment)
+                            _redact(item, parent_environment)
                             for item in normalized["artifacts"]
                         ],
                     }
@@ -196,12 +222,13 @@ class ProcessAdapter(ABC):
             exit_class = "infra"
             transcript["error"] = f"cannot launch worker CLI: {error}"
         except (OSError, subprocess.SubprocessError, StoreError, ValueError) as error:
+            exit_class = failure_class
             transcript["error"] = str(error)
 
         transcript["exit_class"] = exit_class
         transcript_path.write_text(
             json.dumps(
-                _redact_value(transcript, environment),
+                _redact_value(transcript, parent_environment),
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,
@@ -209,7 +236,7 @@ class ProcessAdapter(ABC):
             + "\n",
             encoding="utf-8",
         )
-        retained_last = _redact(raw_last_message, environment)
+        retained_last = _redact(raw_last_message, parent_environment)
         if not retained_last:
             retained_last = _redact(
                 json.dumps(
@@ -217,7 +244,7 @@ class ProcessAdapter(ABC):
                     ensure_ascii=False,
                     sort_keys=True,
                 ),
-                environment,
+                parent_environment,
             )
         last_message_path.write_text(retained_last.rstrip() + "\n", encoding="utf-8")
         return DispatchResult(
@@ -269,25 +296,38 @@ def _run_process(
         )
         try:
             process.communicate(prompt.encode("utf-8"), timeout=timeout)
-            return process.returncode, False
+            return_code = process.returncode
+            _terminate_process_group(process)
+            return return_code, False
         except subprocess.TimeoutExpired:
             _terminate_process_group(process)
             return process.returncode, True
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:
+    process_group = process.pid
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(process_group, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    try:
-        process.wait(timeout=1)
-    except subprocess.TimeoutExpired:
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline and _process_group_exists(process_group):
+        time.sleep(0.01)
+    if _process_group_exists(process_group):
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            os.killpg(process_group, signal.SIGKILL)
         except ProcessLookupError:
             pass
+    if process.poll() is None:
         process.wait(timeout=5)
+
+
+def _process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except (PermissionError, ProcessLookupError):
+        return False
+    return True
 
 
 def _publish_candidate(
@@ -315,6 +355,63 @@ def _publish_candidate(
     _git(product, ("merge", "--quiet", "--ff-only", "FETCH_HEAD"), timeout=timeout)
     if _git(product, ("rev-parse", "HEAD"), timeout=timeout).strip() != candidate_head:
         raise ValueError("product did not fast-forward to claimed commit")
+
+
+def _reject_candidate_secrets(
+    checkout: Path,
+    base_head: str,
+    candidate_head: str,
+    environment: Mapping[str, str],
+    *,
+    timeout: float,
+) -> None:
+    changed = set(
+        _git_bytes(
+            checkout,
+            ("diff", "--name-only", "-z", base_head, candidate_head),
+            timeout=timeout,
+        ).split(b"\0")
+    )
+    changed.discard(b"")
+    tree_entries = _git_bytes(
+        checkout,
+        ("ls-tree", "-rz", candidate_head),
+        timeout=timeout,
+    ).split(b"\0")
+    for entry in tree_entries:
+        if not entry or b"\t" not in entry:
+            continue
+        metadata, path = entry.split(b"\t", 1)
+        if path not in changed:
+            continue
+        parts = metadata.split()
+        if len(parts) != 3 or parts[1] != b"blob":
+            continue
+        if _payload_contains_secret(path, environment):
+            raise ValueError("candidate contains a sensitive value in a path")
+        payload = _git_bytes(
+            checkout,
+            ("cat-file", "blob", parts[2].decode("ascii")),
+            timeout=timeout,
+        )
+        if _payload_contains_secret(payload, environment):
+            display_path = path.decode("utf-8", errors="replace")
+            raise ValueError(
+                f"candidate contains a sensitive value in {display_path}"
+            )
+    commits = _git(
+        checkout,
+        ("rev-list", f"{base_head}..{candidate_head}"),
+        timeout=timeout,
+    ).splitlines()
+    for commit in commits:
+        payload = _git_bytes(
+            checkout,
+            ("cat-file", "commit", commit),
+            timeout=timeout,
+        )
+        if _payload_contains_secret(payload, environment):
+            raise ValueError("candidate contains a sensitive value in commit metadata")
 
 
 def _normalize_claim(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -366,22 +463,27 @@ def _git(root: Path, arguments: Sequence[str], *, timeout: float) -> str:
     return completed.stdout
 
 
+def _git_bytes(root: Path, arguments: Sequence[str], *, timeout: float) -> bytes:
+    completed = subprocess.run(
+        ["git", *arguments],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        timeout=timeout,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"git {' '.join(arguments)} failed: {detail}")
+    return completed.stdout
+
+
 def _read_output(path: Path) -> str:
     return path.read_bytes().decode("utf-8", errors="replace")
 
 
 def _redact(value: str, environment: Mapping[str, str]) -> str:
     redacted = value
-    secrets = sorted(
-        {
-            secret
-            for name, secret in environment.items()
-            if _SECRET_ENV_NAME.search(name) and len(secret) >= 6
-        },
-        key=len,
-        reverse=True,
-    )
-    for secret in secrets:
+    for secret in _sensitive_values(environment):
         redacted = redacted.replace(secret, "<redacted>")
     for pattern in _KNOWN_SECRET_PATTERNS:
         redacted = pattern.sub(
@@ -391,6 +493,36 @@ def _redact(value: str, environment: Mapping[str, str]) -> str:
             redacted,
         )
     return redacted
+
+
+def _payload_contains_secret(payload: bytes, environment: Mapping[str, str]) -> bool:
+    for secret in _sensitive_values(environment):
+        if secret.encode("utf-8", errors="ignore") in payload:
+            return True
+    text = payload.decode("utf-8", errors="replace")
+    return any(pattern.search(text) for pattern in _KNOWN_SECRET_PATTERNS)
+
+
+def _sensitive_values(environment: Mapping[str, str]) -> list[str]:
+    return sorted(
+        {
+            secret
+            for name, secret in environment.items()
+            if _SECRET_ENV_NAME.search(name) and len(secret) >= 6
+        },
+        key=len,
+        reverse=True,
+    )
+
+
+def _worker_environment(
+    environment: Mapping[str, str], allowed_secret_names: frozenset[str]
+) -> dict[str, str]:
+    return {
+        name: value
+        for name, value in environment.items()
+        if not _SECRET_ENV_NAME.search(name) or name in allowed_secret_names
+    }
 
 
 def _redact_value(value: Any, environment: Mapping[str, str]) -> Any:
