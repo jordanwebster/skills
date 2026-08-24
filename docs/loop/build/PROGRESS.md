@@ -183,15 +183,19 @@ next iteration trusts this file over anything else.
 - 2026-08-24 — M4 completed in `852d7c6` (`Complete M4 adapter isolation`).
   The process-launch boundary now replaces inherited `PWD` and `OLDPWD` with
   the resolved disposable checkout, and both executable vendor fixtures reject
-  any source-directory disclosure. Candidate publication now scans every blob,
-  commit object, and reported path introduced by `base..candidate`, so a seeded
-  worker that commits an API key and deletes it before its clean final claim is
-  rejected without publishing the history or retaining the secret. Sixty-six
-  stdlib framework tests, both real-CLI fixture flights, the fresh toy flight,
-  and the full repository suite pass. Authenticated dispatch remains untested
-  under the brief's no-network constraint, as recorded in QUESTIONS.md. The
-  whole-build check advances monotonically and exits 1 with `build incomplete:
-  M5 judge, outbox, and bless are not implemented`.
+  any source-directory disclosure. Candidate publication now scans every blob
+  and commit object introduced by `base..candidate`, so a seeded worker that
+  commits an API key and deletes it before its clean final claim is rejected
+  without publishing the history or retaining the secret. The independent
+  review found that Git's object walk omits a changed path when it reuses a blob
+  already reachable from the base; `69e3431` (`Close M4 reused-blob path gap`)
+  enumerates changed paths for every introduced commit and seeds that exact
+  rejection before publication. Sixty-seven stdlib framework tests, both
+  real-CLI fixture flights, the fresh toy flight, and the full repository suite
+  pass after the bounded fix. Authenticated dispatch remains untested under the
+  brief's no-network constraint, as recorded in QUESTIONS.md. The whole-build
+  check advances monotonically and exits 1 with `build incomplete: M5 judge,
+  outbox, and bless are not implemented`.
 
 ## Next
 
