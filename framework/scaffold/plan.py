@@ -108,6 +108,7 @@ def import_plan(store: Store, path: str | Path) -> ImportedPlan:
     source = _read_plan_source(plan_path)
     plan = _parse_plan_source(plan_path, source)
     destination = retained_plan_path(store, plan.digest)
+    _ensure_durable_descendant(store.root, destination.parent)
     _atomic_write_once_bytes(destination, source)
     store.apply(
         {
@@ -210,7 +211,6 @@ def _canonical_json(value: Any) -> bytes:
 
 
 def _atomic_write_once_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
         dir=path.parent,
         prefix=f".{path.name}.",
@@ -229,10 +229,31 @@ def _atomic_write_once_bytes(path: Path, payload: bytes) -> None:
                 raise PlanError(
                     f"retained plan {path.name} already exists with different bytes"
                 )
-        else:
-            _fsync_directory(path.parent)
+        _fsync_directory(path.parent)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _ensure_durable_descendant(root: Path, directory: Path) -> None:
+    try:
+        relative = directory.relative_to(root)
+    except ValueError as error:
+        raise PlanError(
+            f"retained plan directory escapes store root: {directory}"
+        ) from error
+    if not root.is_dir():
+        raise PlanError(f"store root is not a directory: {root}")
+
+    parent = root
+    for component in relative.parts:
+        child = parent / component
+        try:
+            child.mkdir()
+        except FileExistsError:
+            if not child.is_dir():
+                raise PlanError(f"retained plan parent is not a directory: {child}")
+        _fsync_directory(parent)
+        parent = child
 
 
 def _fsync_directory(path: Path) -> None:

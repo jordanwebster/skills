@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import scaffold.plan as plan_module
 from scaffold.plan import PlanError, import_plan, read_plan, retained_plan_path
 from scaffold.store import (
     InvalidTransition,
@@ -159,13 +160,63 @@ class PlanAndFrontierTests(unittest.TestCase):
 
         self.assertEqual(parsed_source, retained_plan_path(self.store).read_bytes())
 
-    def test_new_retained_plan_fsyncs_its_directory_entry(self) -> None:
+    def test_new_retained_plan_fsyncs_each_new_directory_entry(self) -> None:
         plan_path = write_plan(self.root / "plan.html", [task("first")])
 
         with patch("scaffold.plan._fsync_directory") as fsync_directory:
             import_plan(self.store, plan_path)
 
-        fsync_directory.assert_called_once_with(retained_plan_path(self.store).parent)
+        inputs_path = self.store.root / "inputs"
+        plans_path = inputs_path / "plans"
+        self.assertEqual(
+            [self.store.root, inputs_path, plans_path],
+            [args[0] for args, _ in fsync_directory.call_args_list],
+        )
+
+    def test_identical_retry_fsyncs_retained_entry_before_state_commit(self) -> None:
+        plan_path = write_plan(self.root / "plan.html", [task("first")])
+        plan = read_plan(plan_path)
+        retained_path = retained_plan_path(self.store, plan.digest)
+        original_fsync_directory = plan_module._fsync_directory
+        failed_once = False
+
+        def fail_first_retained_fsync(path: Path) -> None:
+            nonlocal failed_once
+            if path == retained_path.parent and not failed_once:
+                failed_once = True
+                raise OSError("injected retained-directory fsync failure")
+            original_fsync_directory(path)
+
+        with patch(
+            "scaffold.plan._fsync_directory",
+            side_effect=fail_first_retained_fsync,
+        ):
+            with self.assertRaisesRegex(OSError, "injected"):
+                import_plan(self.store, plan_path)
+
+        self.assertTrue(retained_path.exists())
+        self.assertEqual([], self.store.load()["tasks"])
+        events: list[tuple[str, Path | str]] = []
+        original_apply = self.store.apply
+
+        def record_apply(transition: dict[str, object]) -> None:
+            events.append(("apply", str(transition["type"])))
+            original_apply(transition)
+
+        with (
+            patch(
+                "scaffold.plan._fsync_directory",
+                side_effect=lambda path: events.append(("fsync", path)),
+            ),
+            patch.object(self.store, "apply", side_effect=record_apply),
+        ):
+            import_plan(self.store, plan_path)
+
+        self.assertIn(("fsync", retained_path.parent), events)
+        self.assertLess(
+            events.index(("fsync", retained_path.parent)),
+            events.index(("apply", "plan-imported")),
+        )
 
     def test_task_id_cannot_escape_workspace_paths(self) -> None:
         plan = write_plan(self.root / "traversal.html", [task("../escape")])

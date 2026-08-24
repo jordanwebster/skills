@@ -17,3 +17,4 @@ never pre-approved.
 - 2026-08-24 — Make `init` idempotently repair an absent atomically-written config when its durable store already matches the requested goal because interruption between those writes must not require manual workspace surgery.
 - 2026-08-24 — Publish retained plan sources with a same-directory fsynced temporary file, an atomic hard-link create, and a directory fsync because digest paths are write-once and must survive a crash without replacement or partial bytes.
 - 2026-08-24 — Parse and retain one byte snapshot of each plan source because the accepted prompt text must always contain the machine contract whose digest and task graph were committed.
+- 2026-08-24 — Fsync every retained-plan directory boundary on every import, including identical retries, because an existing entry may be the residue of an interrupted publication whose parent fsync never completed.
