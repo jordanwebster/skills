@@ -26,6 +26,8 @@ CLOSED_TRIGGERS = frozenset(
         "identical-error",
         "wall-clock-cap",
         "review-findings",
+        "proposal-envelope",
+        "proposal-folding",
     }
 )
 

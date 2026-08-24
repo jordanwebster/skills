@@ -15,7 +15,7 @@ fi
 
 output=$(cat "$output_file")
 assert_eq \
-    "build incomplete: M5 proposal folding is not implemented" \
+    "build incomplete: M5 demonstration freshness and bless are not implemented" \
     "$output" \
     "the whole-build check should name the first remaining milestone"
 

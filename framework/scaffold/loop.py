@@ -14,6 +14,7 @@ import uuid
 from .adapters.base import DispatchResult
 from .judge import Judge, normalize_decision
 from .prompt import assemble_prompt
+from .proposal import Planner, normalize_folding, pending_proposals, proposal_batch_id
 from .store import InvalidTransition, Lease, Store
 from .verify import verify
 
@@ -73,6 +74,7 @@ def run_loop(
     binding_label: str = "worker",
     lifecycle: Lifecycle | None = None,
     judge: Judge | None = None,
+    planner: Planner | None = None,
     work_attempt_limit: int = 3,
     clock: Callable[[], float] | None = None,
     id_source: Callable[[], str] | None = None,
@@ -91,10 +93,11 @@ def run_loop(
     segment = 0
     while True:
         state = store.load()
+        pending = pending_proposals(state)
         open_escalations = [
             item for item in state["outbox"] if item["status"] == "open"
         ]
-        if not open_escalations and state["tasks"] and all(
+        if not pending and not open_escalations and state["tasks"] and all(
             task["completion"] == "complete" and task["verdict"] == "green"
             for task in state["tasks"]
         ):
@@ -115,6 +118,17 @@ def run_loop(
                     tuple(completed),
                     f"frontier has no task for profile {profile}",
                 )
+            if pending:
+                folding_result = _fold_proposals(
+                    store,
+                    completed=completed,
+                    planner=planner,
+                    clock=observed_time,
+                    id_source=next_id,
+                )
+                if folding_result is not None:
+                    return folding_result
+                continue
             if open_escalations:
                 return RunResult(
                     "awaiting-operator",
@@ -136,6 +150,7 @@ def run_loop(
                 failure=_latest_failure_reason(store, task["id"]),
                 completed=completed,
                 judge=judge,
+                planner=planner,
                 clock=observed_time,
                 id_source=next_id,
             )
@@ -239,6 +254,7 @@ def run_loop(
                     failure=result.failure_reason or result.exit_class,
                     completed=completed,
                     judge=judge,
+                    planner=planner,
                     clock=observed_time,
                     id_source=next_id,
                 )
@@ -397,6 +413,7 @@ def _route_judgment(
     failure: str,
     completed: list[str],
     judge: Judge | None,
+    planner: Planner | None,
     clock: Callable[[], float],
     id_source: Callable[[], str],
 ) -> RunResult:
@@ -474,11 +491,79 @@ def _route_judgment(
             tuple(completed),
             f"operator answer needed for {task['title']}",
         )
+    if decision["decision"] in {"split", "rebrief", "rebind"}:
+        folding_result = _fold_proposals(
+            store,
+            completed=completed,
+            planner=planner,
+            clock=clock,
+            id_source=id_source,
+        )
+        if folding_result is not None:
+            return folding_result
     return RunResult(
         "parked",
         tuple(completed),
         f"{task['title']} was parked after {trigger}",
     )
+
+
+def _fold_proposals(
+    store: Store,
+    *,
+    completed: list[str],
+    planner: Planner | None,
+    clock: Callable[[], float],
+    id_source: Callable[[], str],
+) -> RunResult | None:
+    state = store.load()
+    proposals = pending_proposals(state)
+    if not proposals:
+        return None
+    batch_id = proposal_batch_id(proposals)
+    observed_at = float(clock())
+    try:
+        if planner is None:
+            raise ValueError("no proposal-folding planner is configured")
+        folding = normalize_folding(
+            planner.fold(state, proposals, batch_id),
+            batch_id=batch_id,
+            proposal_ids=[item["id"] for item in proposals],
+        )
+        store.apply(
+            {
+                "type": "proposal-batch-folded",
+                "batch_id": batch_id,
+                "folding": folding,
+                "observed_at": observed_at,
+            }
+        )
+    except (InvalidTransition, ValueError) as error:
+        raw_id = id_source()
+        if not isinstance(raw_id, str):
+            raise ValueError("escalation id source must return text") from error
+        escalation_id = "esc-" + raw_id.casefold()
+        store.apply(
+            {
+                "type": "proposal-batch-failed",
+                "batch_id": batch_id,
+                "proposal_ids": [item["id"] for item in proposals],
+                "reason": f"The planning pass was unavailable or malformed: {error}",
+                "observed_at": observed_at,
+                "escalation_id": escalation_id,
+            }
+        )
+        _event(store, f"{batch_id}: proposal folding failed; operator answer needed")
+        return RunResult(
+            "awaiting-operator",
+            tuple(completed),
+            "proposal routing needs an operator answer",
+        )
+    _event(
+        store,
+        f"{batch_id}: folded {len(proposals)} proposal(s); graph updated",
+    )
+    return None
 
 
 def _latest_failure_reason(store: Store, task_id: str) -> str:

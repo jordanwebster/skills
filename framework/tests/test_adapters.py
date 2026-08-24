@@ -312,6 +312,12 @@ class RealAdapterFlightTests(unittest.TestCase):
     def test_claude_cli_retry_cap_dispatches_roster_judge(self) -> None:
         self._assert_cli_retry_cap_judge("claude")
 
+    def test_codex_cli_folds_proposal_with_roster_planner(self) -> None:
+        self._assert_cli_proposal_planner("codex")
+
+    def test_claude_cli_folds_proposal_with_roster_planner(self) -> None:
+        self._assert_cli_proposal_planner("claude")
+
     def _assert_cli_retry_cap_judge(self, vendor: str) -> None:
         roster_path = self._write_roster(vendor)
         outputs: list[str] = []
@@ -363,6 +369,45 @@ class RealAdapterFlightTests(unittest.TestCase):
         )
         self.assertNotIn(SECRET, retained)
         self.assertIn("<redacted>", task["judgments"][0]["reason"])
+
+    def _assert_cli_proposal_planner(self, vendor: str) -> None:
+        roster_path = self._write_roster(vendor)
+        with patch.dict(os.environ, {"SCAFFOLD_FIXTURE_MODE": "proposal"}):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                return_code = main(
+                    [
+                        "run",
+                        str(self.workspace),
+                        "--adapter",
+                        "roster",
+                        "--roster",
+                        str(roster_path),
+                        "--holder",
+                        "fixture-worker",
+                    ]
+                )
+
+        self.assertEqual(0, return_code, output.getvalue())
+        state = self.store.load()
+        self.assertEqual("green", state["tasks"][0]["verdict"])
+        self.assertEqual(
+            "beyond-flight",
+            state["proposals"][0]["routing"]["disposition"],
+        )
+        self.assertEqual("local", state["followups"][0]["status"])
+        batch_id = state["proposals"][0]["routing"]["batch_id"]
+        transcript = json.loads(
+            (
+                self.workspace
+                / "adapter-results"
+                / "planner"
+                / batch_id
+                / "transcript.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual("success", transcript["exit_class"])
+        self.assertEqual("read-only", transcript["sandbox"])
 
     def test_roster_arguments_cannot_override_vendor_sandbox(self) -> None:
         roster_path = self._write_roster("codex")
@@ -560,24 +605,26 @@ class RealAdapterFlightTests(unittest.TestCase):
             import json
             import os
             from pathlib import Path
+            import re
             import subprocess
             import sys
 
             vendor = Path(sys.argv[0]).name
             prompt = sys.stdin.read()
             is_judge = "ephemeral failure judge" in prompt
-            if not is_judge and "structured claim" not in prompt:
+            is_planner = "fresh proposal-folding planner" in prompt
+            if not is_judge and not is_planner and "structured claim" not in prompt:
                 print("missing structured-claim brief", file=sys.stderr)
                 raise SystemExit(2)
             if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "quota":
                 print("quota exceeded", file=sys.stderr)
                 raise SystemExit(1)
-            if not is_judge and (
+            if not is_judge and not is_planner and (
                 Path(".scaffolding").exists() or Path("control-alias").exists()
             ):
                 print("worker could reach framework control state", file=sys.stderr)
                 raise SystemExit(3)
-            if not is_judge and subprocess.run(
+            if not is_judge and not is_planner and subprocess.run(
                 ["git", "remote"], check=True, capture_output=True, text=True
             ).stdout.strip():
                 print("worker clone retained a source remote", file=sys.stderr)
@@ -615,6 +662,30 @@ class RealAdapterFlightTests(unittest.TestCase):
                     print(json.dumps({{"type": "result"}}))
                 elif vendor == "claude":
                     print(json.dumps({{"type": "result", "structured_output": decision}}))
+                raise SystemExit(0)
+            if is_planner:
+                batch_match = re.search(r'"batch_id": "([^"]+)"', prompt)
+                if batch_match is None or '"id": "fixture-followup"' not in prompt:
+                    print("planner omitted its proposal batch", file=sys.stderr)
+                    raise SystemExit(10)
+                folding = {{
+                    "schema_version": 1,
+                    "batch_id": batch_match.group(1),
+                    "routes": [
+                        {{
+                            "proposal_id": "fixture-followup",
+                            "disposition": "beyond-flight",
+                            "reason": "Useful after this fixture flight.",
+                            "task": None,
+                        }}
+                    ],
+                }}
+                if vendor == "codex":
+                    output_path = Path(sys.argv[sys.argv.index("--output-last-message") + 1])
+                    output_path.write_text(json.dumps(folding) + "\\n")
+                    print(json.dumps({{"type": "result"}}))
+                elif vendor == "claude":
+                    print(json.dumps({{"type": "result", "structured_output": folding}}))
                 raise SystemExit(0)
             if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "worker-error":
                 print("compiler rejected fixture syntax", file=sys.stderr)
@@ -662,6 +733,15 @@ class RealAdapterFlightTests(unittest.TestCase):
                 "artifacts": ["artifact.txt", "{SECRET}"],
                 "reason": None,
             }}
+            if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "proposal":
+                claim["proposals"] = [
+                    {{
+                        "id": "fixture-followup",
+                        "title": "Polish the fixture later",
+                        "rationale": "The current check does not cover polish.",
+                        "suggested_dependencies": ["build"],
+                    }}
+                ]
             if os.environ.get("SCAFFOLD_FIXTURE_MODE") == "malformed":
                 claim = {{"claim": "passes"}}
             print("{SECRET}", file=sys.stderr)

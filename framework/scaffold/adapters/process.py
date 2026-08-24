@@ -15,6 +15,7 @@ import time
 from typing import Any
 
 from .base import DispatchResult
+from ..proposal import normalize_claim_proposals
 from ..store import SCHEMA_VERSION, Store, StoreError, validate_task_id
 
 
@@ -54,6 +55,28 @@ CLAIM_SCHEMA: dict[str, Any] = {
                 }
             },
             "required": ["findings"],
+        },
+        "proposals": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string", "minLength": 1},
+                    "title": {"type": "string", "minLength": 1},
+                    "rationale": {"type": "string", "minLength": 1},
+                    "suggested_dependencies": {
+                        "type": "array",
+                        "items": {"type": "string", "minLength": 1},
+                    },
+                },
+                "required": [
+                    "id",
+                    "title",
+                    "rationale",
+                    "suggested_dependencies",
+                ],
+            },
         },
     },
     "required": ["claim", "candidate_head", "artifacts", "reason"],
@@ -257,6 +280,10 @@ class ProcessAdapter(ABC):
                         if normalized.get("review") is not None:
                             safe_claim["review"] = _redact_value(
                                 normalized["review"], parent_environment
+                            )
+                        if normalized["proposals"]:
+                            safe_claim["proposals"] = _redact_value(
+                                normalized["proposals"], parent_environment
                             )
                         claim_path = result_root / "claim-source.json"
                         claim_path.write_text(
@@ -490,10 +517,9 @@ def _normalize_claim(
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("structured claim must be an object")
-    if set(value) not in (
-        {"claim", "candidate_head", "artifacts", "reason"},
-        {"claim", "candidate_head", "artifacts", "reason", "review"},
-    ):
+    required = {"claim", "candidate_head", "artifacts", "reason"}
+    optional = {"review", "proposals"}
+    if not required <= set(value) or set(value) - required - optional:
         raise ValueError("structured claim has unexpected fields")
     if value["claim"] == "ambiguity":
         reason = value["reason"]
@@ -503,6 +529,7 @@ def _normalize_claim(
             value["candidate_head"] is not None
             or value["artifacts"] != []
             or value.get("review") is not None
+            or value.get("proposals") not in (None, [])
         ):
             raise ValueError(
                 "structured ambiguity cannot name a candidate, artifacts, or findings"
@@ -543,6 +570,9 @@ def _normalize_claim(
     }
     if review is not None:
         normalized["review"] = _normalize_review(review)
+    normalized["proposals"] = normalize_claim_proposals(
+        value.get("proposals", [])
+    )
     return normalized
 
 

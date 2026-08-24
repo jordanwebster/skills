@@ -174,16 +174,20 @@ def _judge_command(
     working_root: Path,
     schema_path: Path,
     raw_last_path: Path,
+    *,
+    schema: Mapping[str, Any] = JUDGE_SCHEMA,
+    job: str = "judge",
 ) -> list[str]:
     if executable == "codex":
         if list(binding.args) != ["exec"]:
-            raise ValueError("codex judge args must be exactly ['exec']")
+            raise ValueError(f"codex {job} args must be exactly ['exec']")
         if list(binding.effort_args) != [
             "-c",
             f"model_reasoning_effort={binding.effort}",
         ]:
             raise ValueError(
-                "codex judge effort_arg must be '-c model_reasoning_effort=<effort>'"
+                f"codex {job} effort_arg must be "
+                "'-c model_reasoning_effort=<effort>'"
             )
         return [
             binding.cli,
@@ -210,9 +214,11 @@ def _judge_command(
         ]
     if executable == "claude":
         if list(binding.args) not in (["-p"], ["--print"]):
-            raise ValueError("claude judge args must be exactly ['-p'] or ['--print']")
+            raise ValueError(
+                f"claude {job} args must be exactly ['-p'] or ['--print']"
+            )
         if binding.effort_args:
-            raise ValueError("claude judge binding must not define effort_arg")
+            raise ValueError(f"claude {job} binding must not define effort_arg")
         settings_path = working_root / "claude-settings.json"
         settings_path.write_text(
             json.dumps(
@@ -254,31 +260,39 @@ def _judge_command(
             "--output-format",
             "json",
             "--json-schema",
-            json.dumps(JUDGE_SCHEMA, separators=(",", ":"), sort_keys=True),
+            json.dumps(schema, separators=(",", ":"), sort_keys=True),
         ]
-    raise ValueError(f"judge binding names unsupported CLI {binding.cli!r}")
+    raise ValueError(f"{job} binding names unsupported CLI {binding.cli!r}")
 
 
 def _extract_decision(
-    executable: str, stdout: str, raw_last_path: Path
+    executable: str,
+    stdout: str,
+    raw_last_path: Path,
+    *,
+    job: str = "judge",
 ) -> tuple[Mapping[str, Any], str]:
     if executable == "codex":
         try:
             raw = raw_last_path.read_text(encoding="utf-8")
             value = json.loads(raw)
         except (OSError, json.JSONDecodeError) as error:
-            raise ValueError(f"codex judge output is not valid JSON: {error}") from error
+            raise ValueError(
+                f"codex {job} output is not valid JSON: {error}"
+            ) from error
     else:
         try:
             envelope = json.loads(stdout)
         except json.JSONDecodeError as error:
-            raise ValueError(f"claude judge output is not valid JSON: {error}") from error
+            raise ValueError(
+                f"claude {job} output is not valid JSON: {error}"
+            ) from error
         if not isinstance(envelope, Mapping):
             raise ValueError("claude judge output must be an object")
         value = envelope.get("structured_output")
         raw = json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n"
     if not isinstance(value, Mapping):
-        raise ValueError("judge structured output must be an object")
+        raise ValueError(f"{job} structured output must be an object")
     return value, raw
 
 

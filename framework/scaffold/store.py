@@ -19,6 +19,14 @@ from typing import Any
 import uuid
 
 from .judge import normalize_decision
+from .proposal import (
+    normalize_claim_proposals,
+    normalize_folding,
+    normalize_proposal,
+    normalize_routing_record,
+    pending_proposals,
+    proposal_batch_id,
+)
 
 
 SCHEMA_VERSION = 1
@@ -71,6 +79,8 @@ def initial_state(goal: str, *, test_paths: list[str] | None = None) -> dict[str
         "plan_digest": None,
         "review_severity_bar": None,
         "tasks": [],
+        "proposals": [],
+        "followups": [],
         "outbox": [],
     }
 
@@ -271,6 +281,12 @@ class Store:
                 raise InvalidTransition("reviewer claim must contain a review result")
             if task["role"] != "reviewer" and normalized.get("review") is not None:
                 raise InvalidTransition("only reviewer tasks may file review findings")
+            existing_proposal_ids = {item["id"] for item in state["proposals"]}
+            claimed_proposal_ids = {
+                item["id"] for item in normalized.get("proposals", [])
+            }
+            if existing_proposal_ids & claimed_proposal_ids:
+                raise InvalidTransition("claim proposal id already exists")
             lease = task["lease"]
             if lease is None or lease["holder"] != normalized["holder"]:
                 raise InvalidTransition("claim holder does not own the task lease")
@@ -398,6 +414,10 @@ class Store:
                 _apply_task_released(state, normalized)
             elif transition_type == "task-judged":
                 _apply_task_judged(state, normalized)
+            elif transition_type == "proposal-batch-folded":
+                _apply_proposal_batch_folded(state, normalized)
+            elif transition_type == "proposal-batch-failed":
+                _apply_proposal_batch_failed(state, normalized)
             else:
                 raise InvalidTransition(
                     f"unsupported transition type: {transition_type}"
@@ -506,6 +526,13 @@ class Store:
                 claim["review"],
                 observed_at=float(observed_at),
             )
+        if verification["verdict"] == "green":
+            _retain_claim_proposals(
+                state,
+                task,
+                claim.get("proposals", []),
+                observed_at=float(observed_at),
+            )
 
     def _read_verification(
         self, relative_name: str, expected_sha256: str
@@ -595,6 +622,8 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
         normalized["review_severity_bar"] = (
             "medium" if normalized.get("plan_digest") is not None else None
         )
+    normalized.setdefault("proposals", [])
+    normalized.setdefault("followups", [])
     normalized.setdefault("outbox", [])
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"state schema_version must be {SCHEMA_VERSION}")
@@ -633,6 +662,45 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
             or origin["review"]["round"] != 0
         ):
             raise ValueError("re-review must name an initial reviewer task")
+    if not isinstance(normalized.get("proposals"), list):
+        raise ValueError("state proposals must be a list")
+    normalized["proposals"] = [
+        normalize_proposal(item) for item in normalized["proposals"]
+    ]
+    proposal_ids = [item["id"] for item in normalized["proposals"]]
+    if len(set(proposal_ids)) != len(proposal_ids):
+        raise ValueError("state proposal ids must be unique")
+    for proposal in normalized["proposals"]:
+        if proposal["source_task_id"] not in tasks_by_id:
+            raise ValueError("proposal names an unknown source task")
+        routing = proposal["routing"]
+        if routing is None:
+            continue
+        if routing["disposition"] == "in-envelope" and (
+            routing["task_id"] not in tasks_by_id
+        ):
+            raise ValueError("routed proposal names an unknown task")
+    if not isinstance(normalized.get("followups"), list):
+        raise ValueError("state followups must be a list")
+    normalized["followups"] = [
+        _normalize_followup(item) for item in normalized["followups"]
+    ]
+    followup_ids = [item["proposal_id"] for item in normalized["followups"]]
+    if len(set(followup_ids)) != len(followup_ids):
+        raise ValueError("state followups must name unique proposals")
+    for followup in normalized["followups"]:
+        if followup["proposal_id"] not in proposal_ids:
+            raise ValueError("followup names an unknown proposal")
+        proposal = next(
+            item
+            for item in normalized["proposals"]
+            if item["id"] == followup["proposal_id"]
+        )
+        if (
+            proposal["routing"] is None
+            or proposal["routing"]["disposition"] != "beyond-flight"
+        ):
+            raise ValueError("followup lacks a beyond-flight proposal route")
     if not isinstance(normalized.get("outbox"), list):
         raise ValueError("state outbox must be a list")
     normalized["outbox"] = [
@@ -831,6 +899,7 @@ def _normalize_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
         "candidate_head",
         "artifacts",
         "review",
+        "proposals",
     }
     if set(normalized) - allowed:
         raise ValueError("claim has unexpected fields")
@@ -848,6 +917,9 @@ def _normalize_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
     review = normalized.get("review")
     if review is not None:
         normalized["review"] = _normalize_review_result(review)
+    normalized["proposals"] = normalize_claim_proposals(
+        normalized.get("proposals", [])
+    )
     _canonical_json(normalized)
     return normalized
 
@@ -1154,6 +1226,265 @@ def _apply_task_judged(
             "observed_at": float(observed_at),
         }
     )
+    if decision["decision"] in {"split", "rebrief", "rebind"}:
+        proposal_id = _derived_task_id(
+            "planning",
+            task_id,
+            decision["trigger"],
+            decision["decision"],
+            str(float(observed_at)),
+        )
+        if any(item["id"] == proposal_id for item in state["proposals"]):
+            raise InvalidTransition("judgment planning proposal already exists")
+        state["proposals"].append(
+            normalize_proposal(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "id": proposal_id,
+                    "source_task_id": task_id,
+                    "title": (
+                        f"{decision['decision'].capitalize()} {task['title']}"
+                    ),
+                    "rationale": decision["reason"],
+                    "suggested_dependencies": list(task["depends_on"]),
+                    "origin": "judgment",
+                    "created_at": float(observed_at),
+                    "routing": None,
+                }
+            )
+        )
+
+
+def _retain_claim_proposals(
+    state: dict[str, Any],
+    task: Mapping[str, Any],
+    proposals: Any,
+    *,
+    observed_at: float,
+) -> None:
+    normalized = normalize_claim_proposals(proposals)
+    existing_ids = {item["id"] for item in state["proposals"]}
+    for proposal in normalized:
+        if proposal["id"] in existing_ids:
+            raise InvalidTransition("claim proposal id already exists")
+        existing_ids.add(proposal["id"])
+        state["proposals"].append(
+            normalize_proposal(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    **proposal,
+                    "source_task_id": task["id"],
+                    "origin": "worker",
+                    "created_at": observed_at,
+                    "routing": None,
+                }
+            )
+        )
+
+
+def _apply_proposal_batch_folded(
+    state: dict[str, Any], transition: Mapping[str, Any]
+) -> None:
+    pending = pending_proposals(state)
+    if not pending:
+        raise InvalidTransition("proposal batch has no pending inputs")
+    batch_id = _required_text(transition, "batch_id")
+    if batch_id != proposal_batch_id(pending):
+        raise InvalidTransition("proposal folding batch id does not match inputs")
+    try:
+        folding = normalize_folding(
+            transition.get("folding"),
+            batch_id=batch_id,
+            proposal_ids=[item["id"] for item in pending],
+        )
+    except ValueError as error:
+        raise InvalidTransition(str(error)) from error
+    observed_at = transition.get("observed_at")
+    if isinstance(observed_at, bool) or not isinstance(observed_at, (int, float)):
+        raise InvalidTransition("proposal folding observed_at must be a number")
+    proposal_by_id = {item["id"]: item for item in state["proposals"]}
+    task_ids = {item["id"] for item in state["tasks"]}
+    for route in folding["routes"]:
+        proposal = proposal_by_id[route["proposal_id"]]
+        disposition = route["disposition"]
+        routed_task_id: str | None = None
+        if disposition == "in-envelope":
+            planned = route["task"]
+            routed_task_id = planned["id"]
+            if routed_task_id in task_ids:
+                raise InvalidTransition("planned proposal task id already exists")
+            task_ids.add(routed_task_id)
+            state["tasks"].append(_task_from_proposal(planned, proposal))
+            if proposal["origin"] == "judgment":
+                source = _task_by_id(state, proposal["source_task_id"])
+                if source["id"] in planned["depends_on"]:
+                    raise InvalidTransition(
+                        "judgment replacement cannot depend on its parked source"
+                    )
+                successors = [
+                    item
+                    for item in state["tasks"]
+                    if item["id"] != routed_task_id
+                    and source["id"] in item["depends_on"]
+                ]
+                source["lineage"]["superseded_by"] = routed_task_id
+                for successor in successors:
+                    successor["depends_on"] = [
+                        routed_task_id if dependency == source["id"] else dependency
+                        for dependency in successor["depends_on"]
+                    ]
+        elif disposition == "beyond-flight":
+            state["followups"].append(
+                _normalize_followup(
+                    {
+                        "proposal_id": proposal["id"],
+                        "source_task_id": proposal["source_task_id"],
+                        "title": proposal["title"],
+                        "rationale": proposal["rationale"],
+                        "routing_reason": route["reason"],
+                        "status": "local",
+                    }
+                )
+            )
+        else:
+            _append_proposal_escalation(
+                state,
+                proposal,
+                trigger="proposal-envelope",
+                reason=route["reason"],
+                observed_at=float(observed_at),
+                escalation_id=(
+                    "esc-proposal-"
+                    + hashlib.sha256(proposal["id"].encode("utf-8")).hexdigest()[:16]
+                ),
+            )
+        proposal["routing"] = normalize_routing_record(
+            {
+                "batch_id": batch_id,
+                "disposition": disposition,
+                "reason": route["reason"],
+                "task_id": routed_task_id,
+            }
+        )
+
+
+def _apply_proposal_batch_failed(
+    state: dict[str, Any], transition: Mapping[str, Any]
+) -> None:
+    pending = pending_proposals(state)
+    if not pending:
+        raise InvalidTransition("failed proposal batch has no pending inputs")
+    batch_id = _required_text(transition, "batch_id")
+    if batch_id != proposal_batch_id(pending):
+        raise InvalidTransition("failed proposal batch id does not match inputs")
+    reason = _required_text(transition, "reason")
+    proposal_ids = transition.get("proposal_ids")
+    if proposal_ids != [item["id"] for item in pending]:
+        raise InvalidTransition("failed proposal batch does not match pending inputs")
+    observed_at = transition.get("observed_at")
+    if isinstance(observed_at, bool) or not isinstance(observed_at, (int, float)):
+        raise InvalidTransition("failed proposal batch observed_at must be a number")
+    escalation_id = _required_text(transition, "escalation_id")
+    first = next(
+        item for item in state["proposals"] if item["id"] == proposal_ids[0]
+    )
+    _append_proposal_escalation(
+        state,
+        first,
+        trigger="proposal-folding",
+        reason=reason,
+        observed_at=float(observed_at),
+        escalation_id=escalation_id,
+    )
+    for proposal in state["proposals"]:
+        if proposal["id"] not in proposal_ids:
+            continue
+        proposal["routing"] = normalize_routing_record(
+            {
+                "batch_id": batch_id,
+                "disposition": "planning-failed",
+                "reason": reason,
+                "task_id": None,
+            }
+        )
+
+
+def _append_proposal_escalation(
+    state: dict[str, Any],
+    proposal: Mapping[str, Any],
+    *,
+    trigger: str,
+    reason: str,
+    observed_at: float,
+    escalation_id: str,
+) -> None:
+    task = _task_by_id(state, proposal["source_task_id"])
+    decision = {
+        "schema_version": SCHEMA_VERSION,
+        "task_id": task["id"],
+        "trigger": trigger,
+        "decision": "defer-to-operator",
+        "reason": reason,
+        "source": "framework-rule",
+        "observed_at": observed_at,
+    }
+    task["judgments"].append(decision)
+    task["parked"] = True
+    escalation = {
+        "id": escalation_id,
+        "task_id": task["id"],
+        "trigger": trigger,
+        "blocked_on": (
+            f"The proposed work '{proposal['title']}' cannot be routed safely: "
+            f"{reason}"
+        ),
+        "proposed_action": (
+            "Confirm whether this work belongs in the current goal and revise the "
+            "plan if it does."
+        ),
+        "effect": (
+            "This proposal stays out of the task graph; independent work can continue."
+        ),
+        "request": "veto-or-confirm",
+        "status": "open",
+        "created_at": observed_at,
+    }
+    try:
+        normalized_escalation = _normalize_escalation(escalation)
+    except ValueError as error:
+        raise InvalidTransition(str(error)) from error
+    if any(item["id"] == escalation_id for item in state["outbox"]):
+        raise InvalidTransition("proposal escalation id already exists")
+    state["outbox"].append(normalized_escalation)
+
+
+def _task_from_proposal(
+    planned: Mapping[str, Any], proposal: Mapping[str, Any]
+) -> dict[str, Any]:
+    return _normalize_task(
+        {
+            "schema_version": SCHEMA_VERSION,
+            **deepcopy(dict(planned)),
+            "decisions": [
+                *planned["decisions"],
+                f"Routed from proposal {proposal['id']}: {proposal['rationale']}",
+            ],
+            "attempts": {"work": 0, "infra": 0, "diagnostic": 0},
+            "completion": "pending",
+            "verdict": None,
+            "parked": False,
+            "judgments": [],
+            "review": None,
+            "evidence": [],
+            "verified_head": None,
+            "lineage": {
+                "retired": False,
+                "revoked": False,
+                "superseded_by": None,
+            },
+            "lease": None,
+        }
+    )
 
 
 def _apply_review_routing(
@@ -1354,7 +1685,13 @@ def _normalize_recorded_judgment(value: Any) -> dict[str, Any]:
     if source not in {"judge", "framework-rule", "fallback"}:
         raise ValueError("recorded judgment source is invalid")
     if source == "framework-rule" and (
-        decision["trigger"] not in {"ambiguity", "review-findings"}
+        decision["trigger"]
+        not in {
+            "ambiguity",
+            "review-findings",
+            "proposal-envelope",
+            "proposal-folding",
+        }
         or decision["decision"] != "defer-to-operator"
     ):
         raise ValueError(
@@ -1371,6 +1708,27 @@ def _normalize_recorded_judgment(value: Any) -> dict[str, Any]:
     ):
         raise ValueError("recorded judgment observed_at must be a number")
     return {**decision, "source": source, "observed_at": float(observed_at)}
+
+
+def _normalize_followup(value: Any) -> dict[str, str]:
+    required = {
+        "proposal_id",
+        "source_task_id",
+        "title",
+        "rationale",
+        "routing_reason",
+        "status",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("followup record has the wrong fields")
+    normalized = deepcopy(dict(value))
+    for field in required:
+        _required_text(normalized, field)
+    validate_task_id(normalized["proposal_id"])
+    validate_task_id(normalized["source_task_id"])
+    if normalized["status"] != "local":
+        raise ValueError("followup status must be local")
+    return normalized
 
 
 def _normalize_escalation(value: Any) -> dict[str, Any]:
@@ -1409,6 +1767,8 @@ def _normalize_escalation(value: Any) -> dict[str, Any]:
         "identical-error",
         "wall-clock-cap",
         "review-findings",
+        "proposal-envelope",
+        "proposal-folding",
     }:
         raise ValueError("escalation trigger is outside the closed trigger enum")
     if normalized["request"] != "veto-or-confirm":

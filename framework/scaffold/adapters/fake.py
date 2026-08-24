@@ -111,6 +111,8 @@ class FakeAdapter:
                 }
                 if step["review"] is not None:
                     claim["review"] = step["review"]
+                if step["proposals"]:
+                    claim["proposals"] = step["proposals"]
                 evidence_source.write_text(
                     json.dumps(
                         claim,
@@ -176,6 +178,11 @@ def _normalize_step(value: Any) -> dict[str, Any]:
     review = value.get("review")
     if review is not None and not isinstance(review, dict):
         raise ValueError("fake review result must be an object")
+    proposals = value.get("proposals", [])
+    if not isinstance(proposals, list) or any(
+        not isinstance(item, dict) for item in proposals
+    ):
+        raise ValueError("fake proposals must be a list of objects")
     if outcome == "passes" and review is None and (
         not isinstance(commit_message, str) or not commit_message or not writes
     ):
@@ -217,6 +224,7 @@ def _normalize_step(value: Any) -> dict[str, Any]:
         "pause_seconds": float(pause_seconds),
         "reason": reason,
         "review": review,
+        "proposals": list(proposals),
     }
 
 
