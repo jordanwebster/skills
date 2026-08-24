@@ -8,7 +8,7 @@ next iteration trusts this file over anything else.
 - [x] M0 — Skeleton: package layout, store read/write/journal, toy-flight goal
       function created and red. Check: check.sh exists, executes, and fails for
       the right reason.
-- [ ] M1 — Loop on fake adapter: selection, leasing, prompt assembly, apply.
+- [x] M1 — Loop on fake adapter: selection, leasing, prompt assembly, apply.
       Check: toy flight goes green end-to-end unattended.
 - [ ] M2 — Verification runner: test-glob diff-gate, verdict enum,
       malformed-reddens-task, artifact-based judgment. Check: seeded lying-worker
@@ -35,16 +35,31 @@ next iteration trusts this file over anything else.
   and the permanent `docs/loop/build/check.sh` entry point. Eight stdlib unit tests
   and the full repository suite pass. The whole-build check intentionally exits 1
   with `build incomplete: M1 toy-flight runner is not implemented`.
+- 2026-08-24 — M1 complete in `667c589` (`Implement M1 fake-adapter build
+  loop`). Landed canonical HTML plan-block import, strict dependency-graph state,
+  deterministic profile-filtered frontier selection, atomic single-worker leases
+  with expiry, typed claims separate from framework-owned transitions, durable
+  prompt assembly, a scripted fake adapter, candidate-commit identity checks, and
+  the `init` / `plan-import` / foreground `run` CLI slice. The fresh-repository toy
+  flight now lands two dependency-ordered product commits and wraps green through
+  the CLI. Nineteen stdlib unit tests and the full repository suite pass. The
+  whole-build check intentionally exits 1 with `build incomplete: seeded-failure
+  suite is not implemented`.
 
 ## Next
 
-- Build M1 only: import the plan's canonical JSON into the task graph; implement
-  dependency/profile frontier selection, single-worker leases with expiry, durable
-  prompt assembly, the fake adapter, typed worker claims, and framework-owned apply.
-- Replace the M0 toy-flight placeholder with the M1 slice of a
-  fresh-temporary-repository flight: init → plan-import → fake-worker loop → wrap,
-  green unattended. Later milestones will extend that same flight through induced
-  stall and escalation. Keep `check.sh` non-zero after the M1 slice succeeds because
-  the complete seeded-failure suite required for the finish line will still be absent.
+- Build M2 only: add the verification runner's restore-and-hash isolation, closed
+  verdict artifacts, test-glob diff gating, artifact-based judgment, and the
+  malformed-evidence boundary that reddens only its task. Seed the lying-worker and
+  bad-paperwork failures while keeping the M1 toy flight green.
+- Replace M1's deliberately narrow `candidate-is-clean-head` identity check in
+  `framework/scaffold/loop.py` with the M2 runner result. Task `check` commands are
+  imported and prompted now but intentionally are not trusted or executed by M1.
+- Extend the same fake-adapter script and temporary product repository rather than
+  creating a second toy path. The fake script schema is `{"steps": [...]}` with one
+  ordered task id, commit message, write map, and optional artifact list per step.
+- Keep `check.sh` non-zero after M2 because supervision, real-adapter, and M5 seeded
+  failures will still be absent; change its one-line reason only to the first genuine
+  unfinished whole-build requirement.
 - Imports currently use `PYTHONPATH=framework`; installation and the stable executable
   surface remain future milestone work.
