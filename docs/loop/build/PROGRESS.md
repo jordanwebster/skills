@@ -38,13 +38,17 @@ next iteration trusts this file over anything else.
 - 2026-08-24 — M1 complete in `667c589` (`Implement M1 fake-adapter build
   loop`), with the independently replayable loop-test fix in `b93fd52` (`Make M1
   loop test independently replayable`) and cross-process lease proof in `347e176`
-  (`Prove M1 lease contention across processes`). Landed canonical HTML plan-block
+  (`Prove M1 lease contention across processes`). The single independent-review fix
+  round landed in `53a0e1b` (`Close M1 state and lease boundary gaps`), removing the
+  unchecked state-replacement API, containing task IDs, binding claims to lease
+  generations, making retained plans digest-addressed, migrating M0 state, and making
+  interrupted initialization recoverable. Landed canonical HTML plan-block
   import, strict dependency-graph state, deterministic profile-filtered frontier
   selection, atomic single-worker leases with expiry, typed claims separate from
   framework-owned transitions, durable prompt assembly, a scripted fake adapter,
   candidate-commit identity checks, and the `init` / `plan-import` / foreground
   `run` CLI slice. The fresh-repository toy flight now lands two dependency-ordered
-  product commits and wraps green through the CLI. Twenty stdlib unit tests and the
+  product commits and wraps green through the CLI. Twenty-six stdlib unit tests and the
   full repository suite pass. The whole-build check intentionally exits 1 with
   `build incomplete: seeded-failure suite is not implemented`.
 
