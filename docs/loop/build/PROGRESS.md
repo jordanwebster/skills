@@ -27,9 +27,9 @@ next iteration trusts this file over anything else.
       ambiguity scenarios produce the right records; a completed review with
       above-bar findings spawns remediation and one re-review, then escalates;
       final demonstrations re-captured at the presented commit; bless
-      round-trips. Typed judgment, retry-cap/ambiguity routing, and the durable
-      outbox are complete; review routing, demonstration freshness, and bless
-      remain.
+      round-trips. Typed judgment, retry-cap/ambiguity routing, the durable
+      outbox, and bounded review routing are complete; proposal folding,
+      demonstration freshness, and bless remain.
 
 ## Iteration log
 
@@ -219,17 +219,47 @@ next iteration trusts this file over anything else.
   an echoed authentication secret. Seventy-six stdlib framework tests and the full
   repository suite pass. The whole-build check advances monotonically and exits 1
   with `build incomplete: M5 review routing is not implemented`.
+- 2026-08-25 — M5 review routing advanced in `c16eb24` (`Route completed review
+  findings`) with the bounded review fix in `6f812e8` (`Close M5 review routing
+  gaps`). Plans now carry an inclusive low/medium/high/critical severity bar and
+  plan-owned remediation role, effort, check, and protected-test scope. Reviewer
+  claims are schema-validated, run read-only against the unchanged dispatch commit,
+  and are adjudicated atomically with the green review transition. Below-bar
+  findings remain recorded; each at-or-above-bar finding creates one implementer
+  remediation, all remediations feed exactly one re-review, and planned successors
+  are rewired behind that bounded path. A finding surviving re-review leaves every
+  completed task green while parking the path and writing one fixed-shape operator
+  question. Existing imported flights without the new field migrate to the medium
+  bar. Independent review found one high and two medium boundary defects: successors
+  could cross the gate before remediation, legacy stores normalized the missing bar
+  to null, and derived remediation could not receive protected-test authority;
+  `6f812e8` fixed all three. The one fresh bounded re-check confirmed the fixes and
+  found no medium-or-higher issue; its sole low finding was this required progress
+  update. Eight focused routing seeds, the JSON boundary demonstration, eighty-four
+  stdlib framework tests, and the full repository suite pass. The full suite has a
+  recorded pre-existing M3 timing flake: two first runs observed detached status as
+  `running` immediately after the task became green, while isolated replays and the
+  subsequent full runs passed. Per the fixed contract, this does not reopen green
+  M3. Both review contexts used the previously recorded same-family `gpt-5.6-sol`
+  xhigh default because the no-network brief precluded the roster's cross-family
+  Claude transport. The whole-build check advances monotonically and exits 1 with
+  `build incomplete: M5 proposal folding is not implemented`.
 
 ## Next
 
-- Continue M5 only: implement completed-review finding adjudication against the
-  plan-time severity bar, remediation task creation, exactly one re-review, and
-  escalation for findings still above the bar. Add the milestone's seeded routing
-  scenario before moving `check.sh` forward again.
-- Keep graph mutation in planning contexts at batch points. The judgment records for
-  `split`, `rebrief`, and `rebind` are deliberately parked inputs; a later proposal-
-  folding chunk must route them rather than letting workers or judges mutate the
-  graph directly.
+- Continue M5 only: implement proposal folding at judge or empty-frontier batch
+  points. Route in-envelope proposals into the graph from a fresh planning context,
+  route beyond-flight work to the authorized tasks seam or the local follow-up list,
+  and escalate envelope-breaking work. Add the seeded proposed-task-folding case
+  before moving `check.sh` forward again.
+- Treat the judgment records for `split`, `rebrief`, and `rebind` as parked planning
+  inputs during proposal folding; workers and judges still never mutate the graph.
+- Preserve review completion independently from findings, read-only reviewer claims,
+  the inclusive plan-time severity bar, atomic finding/graph routing, planned-
+  successor rewiring, plan-owned remediation test scope, and the single re-review
+  limit.
+- After proposal folding, finish demonstration freshness and bless round-tripping;
+  neither is implemented by the review-routing chunk.
 - Preserve the atomic parked-task/outbox transition, the pre-dispatch retry-cap
   check, ambiguity's diagnostic accounting, real-adapter ambiguity redaction, and
   the roster-backed read-only judge's concrete redacted failure input.
