@@ -175,11 +175,14 @@ def _safe_product_path(root: Path, relative_name: str) -> Path:
     relative = Path(relative_name)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"fake write escapes product root: {relative_name}")
-    if relative.parts and relative.parts[0] == ".scaffolding":
+    if any(part.casefold() == ".scaffolding" for part in relative.parts):
         raise ValueError("fake worker cannot write framework control state")
     candidate = (root / relative).resolve()
     if os.path.commonpath([root, candidate]) != str(root):
         raise ValueError(f"fake write escapes product root: {relative_name}")
+    control_root = (root / ".scaffolding").resolve()
+    if os.path.commonpath([control_root, candidate]) == str(control_root):
+        raise ValueError("fake worker cannot write framework control state")
     return candidate
 
 

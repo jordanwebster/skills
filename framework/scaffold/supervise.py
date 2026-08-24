@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 import fcntl
 import json
@@ -265,6 +266,20 @@ class Supervisor:
         self._active_task_id = lease.task_id
         self._write_heartbeat()
 
+    def claim_task(
+        self,
+        store: Store,
+        task_id: str,
+        holder: str,
+        ttl_seconds: float,
+    ) -> Lease | None:
+        """Linearize drain requests with the transition that makes work active."""
+
+        with _boundary_lock(self.runtime_root / "task-boundary.lock"):
+            if self.should_drain():
+                return None
+            return store.claim(task_id, holder, ttl_seconds=ttl_seconds)
+
     def task_finished(self) -> None:
         self.clear_active_task()
 
@@ -364,18 +379,22 @@ def restore_signal_handlers(previous: Mapping[int, Any]) -> None:
 
 def request_drain(workspace: str | Path) -> None:
     root = Path(workspace).resolve()
-    owner = _locked_owner(root)
-    if owner is None:
+    if not root.is_dir():
         raise SupervisionError("flight has no active driver to drain")
-    _atomic_write_json(
-        root / "runtime" / "drain.json",
-        {
-            "schema_version": RUNTIME_SCHEMA_VERSION,
-            "run_id": owner["run_id"],
-            "requested_at": time.time(),
-        },
-        durable=True,
-    )
+    runtime_root = root / "runtime"
+    with _boundary_lock(runtime_root / "task-boundary.lock"):
+        owner = _locked_owner(root)
+        if owner is None:
+            raise SupervisionError("flight has no active driver to drain")
+        _atomic_write_json(
+            runtime_root / "drain.json",
+            {
+                "schema_version": RUNTIME_SCHEMA_VERSION,
+                "run_id": owner["run_id"],
+                "requested_at": time.time(),
+            },
+            durable=True,
+        )
 
 
 def stop_driver(workspace: str | Path, *, timeout: float = 5.0) -> None:
@@ -660,6 +679,20 @@ def _open_lock(path: Path) -> int:
         os.close(descriptor)
         raise SupervisionError("driver lock is not a regular file")
     return descriptor
+
+
+@contextmanager
+def _boundary_lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = _open_lock(path)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 def _read_optional_json(

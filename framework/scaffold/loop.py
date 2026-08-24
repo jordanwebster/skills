@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from .adapters.base import DispatchResult
 from .prompt import assemble_prompt
-from .store import InvalidTransition, Store
+from .store import InvalidTransition, Lease, Store
 from .verify import verify
 
 
@@ -38,6 +38,14 @@ class Lifecycle(Protocol):
     def task_finished(self) -> None: ...
 
     def should_drain(self) -> bool: ...
+
+    def claim_task(
+        self,
+        store: Store,
+        task_id: str,
+        holder: str,
+        ttl_seconds: float,
+    ) -> Lease | None: ...
 
 
 @dataclass(frozen=True)
@@ -107,11 +115,22 @@ def run_loop(
         verification_timeout = _verification_timeout(
             state, task, dispatch_timeout
         )
-        lease = store.claim(
-            task["id"],
-            holder,
-            ttl_seconds=lease_seconds + dispatch_timeout,
-        )
+        claim_ttl = lease_seconds + dispatch_timeout
+        if lifecycle is None:
+            lease = store.claim(task["id"], holder, ttl_seconds=claim_ttl)
+        else:
+            lease = lifecycle.claim_task(
+                store,
+                task["id"],
+                holder,
+                claim_ttl,
+            )
+            if lease is None:
+                return RunResult(
+                    "drained",
+                    tuple(completed),
+                    "drain requested before the next task was leased",
+                )
         if lifecycle is not None:
             lifecycle.task_started(task, lease, base_head)
         prompt = assemble_prompt(task, durable_paths)

@@ -12,15 +12,20 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from scaffold.__main__ import _init
+from scaffold.adapters.fake import FakeAdapter, _safe_product_path
+from scaffold.loop import run_loop
 from scaffold.plan import import_plan
 from scaffold.store import Store
 from scaffold.supervise import (
     DriverBusy,
     DriverLock,
     LaunchError,
+    Supervisor,
     read_status,
+    request_drain,
     start_detached,
     stop_driver,
 )
@@ -247,7 +252,7 @@ raise SystemExit(0 if exists else 1)
         self.assertEqual("complete", status.state)
         self.assertEqual("2", git(self.product, "rev-list", "--count", "HEAD"))
 
-    def test_stop_kills_driver_group_and_relaunch_restores_candidate(self) -> None:
+    def test_sigkill_driver_and_relaunch_restores_candidate(self) -> None:
         interrupted = self._write_script(
             "interrupted.json",
             [self._step("build", pause_seconds=30)],
@@ -279,8 +284,16 @@ raise SystemExit(0 if exists else 1)
         self.assertNotEqual(0, contender.returncode)
         self.assertIn("another driver already owns", contender.stdout)
 
-        stopped = self._scaffold("stop", str(self.workspace))
-        self.assertIn("released its flight lock", stopped.stdout)
+        heartbeat = json.loads(
+            (self.workspace / "runtime" / "heartbeat.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        os.killpg(heartbeat["pgid"], signal.SIGKILL)
+        wait_until(
+            self._driver_lock_is_free,
+            "SIGKILL did not release the driver lock",
+        )
         self.assertTrue((self.workspace / "runtime" / "active-task.json").is_file())
 
         relaunched = self._scaffold(
@@ -300,6 +313,55 @@ raise SystemExit(0 if exists else 1)
         self.assertFalse((self.workspace / "runtime" / "active-task.json").exists())
         self.assertEqual("2", git(self.product, "rev-list", "--count", "HEAD"))
         self.assertEqual("", git(self.product, "status", "--porcelain"))
+
+    def test_fake_worker_cannot_alias_framework_control_state(self) -> None:
+        alias = self.product / "control-alias"
+        alias.symlink_to(self.product / ".scaffolding", target_is_directory=True)
+
+        for relative_name in (
+            ".SCAFFOLDING/supervised-toy/runtime/heartbeat.json",
+            "control-alias/supervised-toy/runtime/heartbeat.json",
+        ):
+            with self.subTest(relative_name=relative_name):
+                with self.assertRaisesRegex(ValueError, "control state"):
+                    _safe_product_path(self.product.resolve(), relative_name)
+
+    def test_drain_before_claim_does_not_dispatch_task(self) -> None:
+        script = self._write_script("never-dispatched.json", [self._step("build")])
+        store = Store(self.workspace)
+        original_ready = store.ready
+        requested = False
+
+        def ready_then_drain(profile=None, **kwargs):
+            nonlocal requested
+            frontier = original_ready(profile, **kwargs)
+            if frontier and not requested:
+                requested = True
+                request_drain(self.workspace)
+            return frontier
+
+        runtime = Supervisor(
+            self.workspace,
+            self.product,
+            heartbeat_interval=0.05,
+            isolate_process_group=False,
+        )
+        with runtime:
+            with patch.object(store, "ready", side_effect=ready_then_drain):
+                result = run_loop(
+                    store,
+                    self.product,
+                    FakeAdapter(script, store),
+                    holder="boundary-worker",
+                    lifecycle=runtime,
+                )
+            runtime.finish("drained", result.reason)
+
+        self.assertEqual("drained", result.status)
+        task = store.load()["tasks"][0]
+        self.assertEqual("pending", task["completion"])
+        self.assertIsNone(task["lease"])
+        self.assertEqual(self.base_head, git(self.product, "rev-parse", "HEAD"))
 
     def test_drain_stops_at_task_boundary_and_next_run_continues(self) -> None:
         self._replace_plan([self._task("first"), self._task("wrap", ["first"])])
@@ -425,6 +487,15 @@ raise SystemExit(0 if exists else 1)
             stop_driver(self.workspace, timeout=1)
         except (FileNotFoundError, OSError, RuntimeError):
             pass
+
+    def _driver_lock_is_free(self) -> bool:
+        lock = DriverLock(self.workspace, "recovery-probe")
+        try:
+            lock.acquire()
+        except DriverBusy:
+            return False
+        lock.release()
+        return True
 
 
 if __name__ == "__main__":
