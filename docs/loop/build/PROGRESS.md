@@ -258,10 +258,24 @@ next iteration trusts this file over anything else.
   escalates instead of stopping the line or losing the inputs. Seeded cases cover
   all three dispositions, empty-frontier batching, malformed restart behavior,
   judgment replacement, and both local Codex and Claude CLI planner contracts; the
-  committed JSON boundary demonstration replays all three route outcomes. Eighty-nine
-  stdlib framework tests, the fresh toy flight, and the full repository suite pass.
-  The whole-build check advances monotonically and exits 1 with `build incomplete:
-  M5 demonstration freshness and bless are not implemented`.
+  committed JSON boundary demonstration replays all three route outcomes. Independent
+  review found two high trust-boundary defects and one medium lifecycle defect: the
+  planner retained broad host-read tools, planner output authored shell checks, and a
+  superseded pending judgment source prevented terminal completion. `db3124c` (`Close
+  proposal folding trust boundaries`) fixes all three: proposal planners have no
+  local tools on the supported Claude path while Codex planner bindings fail closed;
+  in-envelope work selects only plan-owned task/check templates; and the all-green
+  predicate excludes nodes removed from the active graph by lineage. The split seed
+  now runs replacement and successor work through terminal green, and a malicious
+  planner-authored check is rejected without execution. Ninety-one stdlib framework
+  tests, the fresh toy flight, and the full repository suite pass after the fix. The
+  first full-suite fix replay hit the already recorded M3 detached-status timing
+  flake; the exact isolated replay and the subsequent full run passed, so green M3 is
+  not reopened. The roster-selected Claude Opus reviewer could not be used under the
+  no-network brief, so the independent review used the recorded same-family
+  `gpt-5.6-sol` xhigh fallback and lacks model-family diversity. The whole-build check
+  advances monotonically and exits 1 with `build incomplete: M5 demonstration
+  freshness and bless are not implemented`.
 
 ## Next
 
