@@ -83,7 +83,10 @@ def initial_state(goal: str, *, test_paths: list[str] | None = None) -> dict[str
         "proposal_templates": {},
         "phase": "working",
         "presented_head": None,
+        "bless_subject": None,
+        "blessing": None,
         "demonstrations": [],
+        "blessed_demonstrations": [],
         "tasks": [],
         "proposals": [],
         "followups": [],
@@ -410,7 +413,12 @@ class Store:
         with self._locked():
             state = self._load_unlocked()
             transition_type = normalized["type"]
-            if transition_type == "plan-imported":
+            if transition_type == "flight-blessed":
+                if not self._apply_flight_blessed(state, normalized):
+                    return deepcopy(state)
+            elif state["phase"] == "accepted":
+                raise InvalidTransition("an accepted flight is terminal")
+            elif transition_type == "plan-imported":
                 _apply_plan_imported(state, normalized)
             elif transition_type == "task-verification-recorded":
                 if "observed_at" not in normalized:
@@ -438,6 +446,68 @@ class Store:
                 )
             normalized_state = _normalize_state(state)
             return self._replace_unlocked(normalized_state, normalized)
+
+    def _apply_flight_blessed(
+        self,
+        state: dict[str, Any],
+        transition: Mapping[str, Any],
+    ) -> bool:
+        subject = _required_text(transition, "subject")
+        accepted_at = transition.get("accepted_at")
+        if (
+            isinstance(accepted_at, bool)
+            or not isinstance(accepted_at, (int, float))
+            or not math.isfinite(accepted_at)
+            or accepted_at < 0
+        ):
+            raise InvalidTransition("blessing accepted_at must be a finite timestamp")
+        if state["phase"] == "accepted":
+            blessing = state["blessing"]
+            if blessing is not None and blessing["subject"] == subject:
+                return False
+            raise InvalidTransition("flight was already accepted for another subject")
+        if state["phase"] != "done-pending-bless":
+            raise InvalidTransition("flight is not ready for acceptance")
+        if subject != state["bless_subject"]:
+            raise InvalidTransition("acceptance does not match the presented subject")
+
+        blessed: list[dict[str, Any]] = []
+        for demonstration in state["demonstrations"]:
+            candidate = demonstration["candidate"]
+            if candidate is None:
+                raise InvalidTransition(
+                    f"demonstration has no candidate to bless: {demonstration['id']}"
+                )
+            artifact = self._read_demonstration_artifact(
+                demonstration,
+                candidate["artifact_path"],
+                candidate["artifact_sha256"],
+            )
+            if artifact["verified_head"] != state["presented_head"]:
+                raise InvalidTransition(
+                    "blessed demonstration names a different presented head"
+                )
+            blessed.append(
+                {
+                    "demonstration_id": demonstration["id"],
+                    "verified_head": candidate["verified_head"],
+                    "artifact_path": candidate["artifact_path"],
+                    "artifact_sha256": candidate["artifact_sha256"],
+                    "surface_fingerprints": deepcopy(
+                        candidate["surface_fingerprints"]
+                    ),
+                    "captured_at": candidate["captured_at"],
+                    "blessed_at": float(accepted_at),
+                }
+            )
+        state["phase"] = "accepted"
+        state["blessing"] = {
+            "subject": subject,
+            "presented_head": state["presented_head"],
+            "accepted_at": float(accepted_at),
+        }
+        state["blessed_demonstrations"] = blessed
+        return True
 
     def _apply_task_verification(
         self,
@@ -617,6 +687,7 @@ class Store:
         demonstration["candidate"] = candidate
         state["phase"] = "working"
         state["presented_head"] = None
+        state["bless_subject"] = None
 
     def _apply_demonstrations_ready(
         self,
@@ -660,6 +731,7 @@ class Store:
             )
         state["phase"] = "done-pending-bless"
         state["presented_head"] = presented_head
+        state["bless_subject"] = _blessing_subject(state)
 
     def _read_demonstration_artifact(
         self,
@@ -810,7 +882,10 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
     normalized.setdefault("outbox", [])
     normalized.setdefault("phase", "working")
     normalized.setdefault("presented_head", None)
+    normalized.setdefault("bless_subject", None)
+    normalized.setdefault("blessing", None)
     normalized.setdefault("demonstrations", [])
+    normalized.setdefault("blessed_demonstrations", [])
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"state schema_version must be {SCHEMA_VERSION}")
     if not isinstance(normalized.get("goal"), str) or not normalized["goal"].strip():
@@ -833,8 +908,10 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
     normalized["proposal_templates"] = normalize_proposal_templates(
         normalized["proposal_templates"]
     )
-    if normalized["phase"] not in {"working", "done-pending-bless"}:
-        raise ValueError("state phase must be working or done-pending-bless")
+    if normalized["phase"] not in {"working", "done-pending-bless", "accepted"}:
+        raise ValueError(
+            "state phase must be working, done-pending-bless, or accepted"
+        )
     if normalized["presented_head"] is not None and (
         not isinstance(normalized["presented_head"], str)
         or not normalized["presented_head"]
@@ -842,10 +919,10 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("state presented_head must be non-empty text or null")
     if normalized["phase"] == "working" and normalized["presented_head"] is not None:
         raise ValueError("a working flight cannot name a presented head")
-    if normalized["phase"] == "done-pending-bless" and (
+    if normalized["phase"] in {"done-pending-bless", "accepted"} and (
         normalized["presented_head"] is None
     ):
-        raise ValueError("a ready flight must name its presented head")
+        raise ValueError("a ready or accepted flight must name its presented head")
     if not isinstance(normalized["demonstrations"], list):
         raise ValueError("state demonstrations must be a list")
     normalized["demonstrations"] = [
@@ -854,13 +931,73 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
     demonstration_ids = [item["id"] for item in normalized["demonstrations"]]
     if len(set(demonstration_ids)) != len(demonstration_ids):
         raise ValueError("state demonstration ids must be unique")
-    if normalized["phase"] == "done-pending-bless" and any(
+    if normalized["phase"] in {"done-pending-bless", "accepted"} and any(
         demonstration["candidate"] is None
         or demonstration["candidate"]["verified_head"]
         != normalized["presented_head"]
         for demonstration in normalized["demonstrations"]
     ):
-        raise ValueError("a ready flight requires fresh demonstration candidates")
+        raise ValueError(
+            "a ready or accepted flight requires fresh demonstration candidates"
+        )
+    if normalized["phase"] in {"done-pending-bless", "accepted"}:
+        expected_subject = _blessing_subject(normalized)
+        if normalized["bless_subject"] is None:
+            normalized["bless_subject"] = expected_subject
+        elif normalized["bless_subject"] != expected_subject:
+            raise ValueError("state bless_subject does not match its presented subject")
+    elif normalized["bless_subject"] is not None:
+        raise ValueError("a working flight cannot name a blessing subject")
+
+    blessing = normalized["blessing"]
+    if blessing is not None:
+        normalized["blessing"] = _normalize_blessing(blessing)
+    if not isinstance(normalized["blessed_demonstrations"], list):
+        raise ValueError("state blessed_demonstrations must be a list")
+    normalized["blessed_demonstrations"] = [
+        _normalize_blessed_demonstration(item)
+        for item in normalized["blessed_demonstrations"]
+    ]
+    blessed_ids = [
+        item["demonstration_id"]
+        for item in normalized["blessed_demonstrations"]
+    ]
+    if len(set(blessed_ids)) != len(blessed_ids):
+        raise ValueError("blessed demonstration ids must be unique")
+    if normalized["phase"] == "accepted":
+        if blessing is None:
+            raise ValueError("an accepted flight requires its blessing record")
+        if (
+            normalized["blessing"]["subject"] != normalized["bless_subject"]
+            or normalized["blessing"]["presented_head"]
+            != normalized["presented_head"]
+        ):
+            raise ValueError("accepted flight blessing does not match its subject")
+        candidates = {
+            item["id"]: item["candidate"]
+            for item in normalized["demonstrations"]
+        }
+        if set(blessed_ids) != set(candidates):
+            raise ValueError("accepted flight must bless every demonstration")
+        for item in normalized["blessed_demonstrations"]:
+            candidate = candidates[item["demonstration_id"]]
+            if candidate is None or any(
+                item[field] != candidate[field]
+                for field in (
+                    "verified_head",
+                    "artifact_path",
+                    "artifact_sha256",
+                    "surface_fingerprints",
+                    "captured_at",
+                )
+            ):
+                raise ValueError(
+                    "blessed demonstration does not match its accepted candidate"
+                )
+            if item["blessed_at"] != normalized["blessing"]["accepted_at"]:
+                raise ValueError("blessed demonstration has a different acceptance time")
+    elif blessing is not None or normalized["blessed_demonstrations"]:
+        raise ValueError("only an accepted flight may retain blessed demonstrations")
     if not isinstance(normalized.get("tasks"), list):
         raise ValueError("state tasks must be a list")
     normalized["tasks"] = [_normalize_task(task) for task in normalized["tasks"]]
@@ -937,7 +1074,7 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
             for judgment in task["judgments"]
         ):
             raise ValueError("state outbox lacks its matching task judgment")
-    if normalized["phase"] == "done-pending-bless":
+    if normalized["phase"] in {"done-pending-bless", "accepted"}:
         active_tasks = [
             task
             for task in normalized["tasks"]
@@ -1169,6 +1306,91 @@ def _normalize_demonstration_candidate(value: Any) -> dict[str, Any]:
         raise ValueError("demonstration captured_at must be a finite timestamp")
     normalized["captured_at"] = float(captured_at)
     return normalized
+
+
+def _blessing_subject(state: Mapping[str, Any]) -> str:
+    presented_head = state.get("presented_head")
+    if not isinstance(presented_head, str) or not presented_head:
+        raise ValueError("a blessing subject requires a presented head")
+    demonstrations = state.get("demonstrations")
+    if not isinstance(demonstrations, list):
+        raise ValueError("a blessing subject requires demonstrations")
+    subject = {
+        "schema_version": SCHEMA_VERSION,
+        "goal": state.get("goal"),
+        "plan_digest": state.get("plan_digest"),
+        "presented_head": presented_head,
+        "demonstrations": [
+            {
+                "id": demonstration["id"],
+                "candidate": demonstration["candidate"],
+            }
+            for demonstration in demonstrations
+        ],
+    }
+    return hashlib.sha256(_canonical_json(subject)).hexdigest()
+
+
+def _normalize_blessing(value: Any) -> dict[str, Any]:
+    required = {"subject", "presented_head", "accepted_at"}
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("blessing record has the wrong fields")
+    normalized = deepcopy(dict(value))
+    for field in ("subject", "presented_head"):
+        _required_text(normalized, field)
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized["subject"]):
+        raise ValueError("blessing subject must be a SHA-256 digest")
+    accepted_at = normalized["accepted_at"]
+    if (
+        isinstance(accepted_at, bool)
+        or not isinstance(accepted_at, (int, float))
+        or not math.isfinite(accepted_at)
+        or accepted_at < 0
+    ):
+        raise ValueError("blessing accepted_at must be a finite timestamp")
+    normalized["accepted_at"] = float(accepted_at)
+    return normalized
+
+
+def _normalize_blessed_demonstration(value: Any) -> dict[str, Any]:
+    required = {
+        "demonstration_id",
+        "verified_head",
+        "artifact_path",
+        "artifact_sha256",
+        "surface_fingerprints",
+        "captured_at",
+        "blessed_at",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("blessed demonstration has the wrong fields")
+    normalized = deepcopy(dict(value))
+    validate_task_id(normalized.get("demonstration_id"))
+    candidate = _normalize_demonstration_candidate(
+        {
+            field: normalized[field]
+            for field in (
+                "verified_head",
+                "artifact_path",
+                "artifact_sha256",
+                "surface_fingerprints",
+                "captured_at",
+            )
+        }
+    )
+    blessed_at = normalized["blessed_at"]
+    if (
+        isinstance(blessed_at, bool)
+        or not isinstance(blessed_at, (int, float))
+        or not math.isfinite(blessed_at)
+        or blessed_at < 0
+    ):
+        raise ValueError("blessed_at must be a finite timestamp")
+    return {
+        "demonstration_id": normalized["demonstration_id"],
+        **candidate,
+        "blessed_at": float(blessed_at),
+    }
 
 
 def _normalize_demonstration_artifact(value: Any) -> dict[str, Any]:
@@ -1598,6 +1820,7 @@ def _apply_demonstration_invalidated(
     demonstration["candidate"] = None
     state["phase"] = "working"
     state["presented_head"] = None
+    state["bless_subject"] = None
 
 
 def _apply_demonstrations_refresh_started(
@@ -1606,6 +1829,7 @@ def _apply_demonstrations_refresh_started(
     _required_text(transition, "target_head")
     state["phase"] = "working"
     state["presented_head"] = None
+    state["bless_subject"] = None
 
 
 def _apply_task_released(

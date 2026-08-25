@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 
 from . import __version__
@@ -19,7 +20,7 @@ from .adapters.planner import RosterPlanner
 from .adapters.roster import RosterAdapter, RosterError
 from .loop import run_loop
 from .plan import import_plan, retained_plan_path
-from .store import Store, initial_state
+from .store import InvalidTransition, Store, StoreCorruption, initial_state
 from .supervise import (
     DriverBusy,
     StopSignal,
@@ -83,6 +84,16 @@ def main(arguments: list[str] | None = None) -> int:
     stop_parser.add_argument("workspace", type=Path)
     stop_parser.add_argument("--timeout", type=float, default=5.0)
 
+    bless_parser = commands.add_parser(
+        "bless", help="record explicit acceptance of the presented subject"
+    )
+    bless_parser.add_argument("workspace", type=Path)
+    bless_parser.add_argument(
+        "--accept",
+        metavar="SUBJECT",
+        help="exact blessing subject shown by the ready flight",
+    )
+
     parsed = parser.parse_args(arguments)
     if parsed.command == "init":
         return _init(parsed.repo, parsed.goal, parsed.slug)
@@ -114,6 +125,8 @@ def main(arguments: list[str] | None = None) -> int:
             return 1
         print("stopped: the driver process group released its flight lock")
         return 0
+    if parsed.command == "bless":
+        return _bless(parsed.workspace, parsed.accept)
     parser.error(f"unknown command: {parsed.command}")
 
 
@@ -262,6 +275,30 @@ def _start(parsed: argparse.Namespace) -> int:
         print(f"cannot start: {error}")
         return 1
     print(f"started: driver {pid} is detached; you can close this shell")
+    return 0
+
+
+def _bless(workspace: Path, accepted_subject: str | None) -> int:
+    if accepted_subject is None:
+        print("not accepted: explicit --accept SUBJECT is required")
+        return 1
+    store = Store(workspace.resolve())
+    try:
+        state = store.apply(
+            {
+                "type": "flight-blessed",
+                "subject": accepted_subject,
+                "accepted_at": time.time(),
+            }
+        )
+    except (InvalidTransition, StoreCorruption, ValueError) as error:
+        print(f"not accepted: {error}")
+        return 1
+    print(
+        "accepted: graduated "
+        f"{len(state['blessed_demonstrations'])} demonstration(s) at "
+        f"{state['presented_head']}"
+    )
     return 0
 
 

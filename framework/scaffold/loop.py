@@ -94,6 +94,12 @@ def run_loop(
     segment = 0
     while True:
         state = store.load()
+        if state["phase"] == "accepted":
+            return RunResult(
+                "complete",
+                tuple(completed),
+                "accepted: the exact presented demonstrations are blessed",
+            )
         pending = pending_proposals(state)
         open_escalations = [
             item for item in state["outbox"] if item["status"] == "open"

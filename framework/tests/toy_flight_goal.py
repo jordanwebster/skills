@@ -176,8 +176,23 @@ print(artifact + wrapped, end="")
         )
         if retained_demo.read_text(encoding="utf-8") != "built\nwrapped\n":
             raise AssertionError("toy demonstration did not retain the shown output")
+        subject = state["bless_subject"]
+        if not isinstance(subject, str) or len(subject) != 64:
+            raise AssertionError("toy flight did not expose an exact blessing subject")
+        _scaffold("bless", str(workspace), "--accept", subject)
+        accepted = json.loads(
+            (workspace / "tasks.json").read_text(encoding="utf-8")
+        )
+        if accepted["phase"] != "accepted":
+            raise AssertionError("toy flight did not retain operator acceptance")
+        if accepted["blessing"]["subject"] != subject:
+            raise AssertionError("toy flight blessed a different presented subject")
+        blessed = accepted["blessed_demonstrations"]
+        if len(blessed) != 1 or blessed[0]["verified_head"] != presented_head:
+            raise AssertionError("toy candidate golden was not graduated")
+        _scaffold("bless", str(workspace), "--accept", subject)
 
-    print("toy flight M5 demonstration freshness green")
+    print("toy flight M5 bless round-trip green")
     return 0
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
 import json
 import os
 from pathlib import Path
@@ -11,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 from scaffold.adapters.fake import FakeAdapter
+from scaffold.__main__ import main as scaffold_main
 from scaffold.loop import run_loop
 from scaffold.plan import PlanError, import_plan, read_plan, retained_plan_path
 from scaffold.store import Store, initial_state
@@ -204,6 +207,98 @@ print(value, end="")
             1,
             sum(item["type"] == "demonstration-invalidated" for item in transitions),
         )
+
+    def test_exact_explicit_acceptance_graduates_candidate_goldens(self) -> None:
+        import_plan(self.store, self.write_plan())
+        result = self.run_flight()
+        self.assertEqual("complete", result.status, result.reason)
+        ready = self.store.load()
+
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exit_code = scaffold_main(
+                ["bless", str(self.store.root), "--accept", ready["bless_subject"]]
+            )
+
+        self.assertEqual(0, exit_code)
+        self.assertIn("accepted: graduated 1 demonstration", output.getvalue())
+        accepted = self.store.load()
+        self.assertEqual("accepted", accepted["phase"])
+        self.assertEqual(ready["presented_head"], accepted["presented_head"])
+        self.assertEqual(ready["bless_subject"], accepted["blessing"]["subject"])
+        blessed = accepted["blessed_demonstrations"]
+        self.assertEqual(["show-first"], [item["demonstration_id"] for item in blessed])
+        self.assertEqual(ready["presented_head"], blessed[0]["verified_head"])
+        self.assertEqual(
+            ready["demonstrations"][0]["candidate"]["artifact_sha256"],
+            blessed[0]["artifact_sha256"],
+        )
+        resumed = self.run_flight()
+        self.assertEqual("complete", resumed.status)
+        self.assertIn("accepted", resumed.reason)
+
+    def test_missing_or_stale_acceptance_is_refused_without_mutation(self) -> None:
+        import_plan(self.store, self.write_plan())
+        result = self.run_flight()
+        self.assertEqual("complete", result.status, result.reason)
+        ready = self.store.load()
+
+        for arguments in (
+            ["bless", str(self.store.root)],
+            ["bless", str(self.store.root), "--accept", "0" * 64],
+        ):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                exit_code = scaffold_main(arguments)
+            self.assertEqual(1, exit_code)
+            self.assertIn("not accepted", output.getvalue())
+
+        refused = self.store.load()
+        self.assertEqual(ready, refused)
+        self.assertEqual("done-pending-bless", refused["phase"])
+        self.assertEqual([], refused["blessed_demonstrations"])
+
+    def test_repeated_exact_acceptance_is_idempotent(self) -> None:
+        import_plan(self.store, self.write_plan())
+        result = self.run_flight()
+        self.assertEqual("complete", result.status, result.reason)
+        subject = self.store.load()["bless_subject"]
+        arguments = ["bless", str(self.store.root), "--accept", subject]
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(0, scaffold_main(arguments))
+        accepted = self.store.load()
+        journal_length = len(self.store.read_journal())
+
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(0, scaffold_main(arguments))
+
+        self.assertEqual(accepted, self.store.load())
+        self.assertEqual(journal_length, len(self.store.read_journal()))
+
+    def test_restart_replays_blessing_after_materialization_interruption(self) -> None:
+        import_plan(self.store, self.write_plan())
+        result = self.run_flight()
+        self.assertEqual("complete", result.status, result.reason)
+        subject = self.store.load()["bless_subject"]
+        arguments = ["bless", str(self.store.root), "--accept", subject]
+
+        with patch(
+            "scaffold.store._atomic_write_json",
+            side_effect=OSError("seeded materialization interruption"),
+        ):
+            with self.assertRaisesRegex(OSError, "seeded materialization"):
+                with redirect_stdout(io.StringIO()):
+                    scaffold_main(arguments)
+
+        restarted = Store(self.store.root)
+        accepted = restarted.load()
+        self.assertEqual("accepted", accepted["phase"])
+        self.assertEqual(subject, accepted["blessing"]["subject"])
+        self.assertEqual(1, len(accepted["blessed_demonstrations"]))
+        journal_length = len(restarted.read_journal())
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(0, scaffold_main(arguments))
+        self.assertEqual(journal_length, len(restarted.read_journal()))
 
     def test_missing_retained_output_is_rederived_on_restart(self) -> None:
         import_plan(self.store, self.write_plan())
