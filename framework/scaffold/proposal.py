@@ -17,6 +17,26 @@ DISPOSITIONS = frozenset(
 )
 
 
+def normalize_proposal_templates(value: Any) -> dict[str, dict[str, Any]]:
+    """Validate plan-owned templates used to materialize proposed tasks."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError("proposal_templates must be an object")
+    normalized: dict[str, dict[str, Any]] = {}
+    required = {"role", "effort", "check", "test_changes"}
+    for name, raw_template in value.items():
+        _validate_id(name, "proposal template id")
+        if not isinstance(raw_template, Mapping) or set(raw_template) != required:
+            raise ValueError("proposal template has the wrong fields")
+        template = deepcopy(dict(raw_template))
+        for field in ("role", "effort", "check"):
+            _required_text(template, field)
+        if not isinstance(template["test_changes"], bool):
+            raise ValueError("proposal template test_changes must be a boolean")
+        normalized[name] = template
+    return normalized
+
+
 class Planner(Protocol):
     """A fresh, read-only planning context invoked at a batch point."""
 
@@ -213,19 +233,17 @@ def _normalize_planned_task(value: Any) -> dict[str, Any]:
     required = {
         "id",
         "title",
-        "role",
-        "effort",
-        "check",
+        "template",
         "depends_on",
         "decisions",
-        "test_changes",
     }
     if not isinstance(value, Mapping) or set(value) != required:
         raise ValueError("planned proposal task has the wrong fields")
     normalized = deepcopy(dict(value))
-    for field in ("id", "title", "role", "effort", "check"):
+    for field in ("id", "title", "template"):
         _required_text(normalized, field)
     _validate_id(normalized["id"], "planned task id")
+    _validate_id(normalized["template"], "planned task template id")
     for field in ("depends_on", "decisions"):
         items = normalized[field]
         if not isinstance(items, list) or any(
@@ -236,8 +254,6 @@ def _normalize_planned_task(value: Any) -> dict[str, Any]:
             raise ValueError(f"planned task {field} must be unique")
     for dependency in normalized["depends_on"]:
         _validate_id(dependency, "planned task dependency")
-    if not isinstance(normalized["test_changes"], bool):
-        raise ValueError("planned task test_changes must be a boolean")
     return normalized
 
 

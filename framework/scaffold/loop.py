@@ -97,9 +97,16 @@ def run_loop(
         open_escalations = [
             item for item in state["outbox"] if item["status"] == "open"
         ]
-        if not pending and not open_escalations and state["tasks"] and all(
-            task["completion"] == "complete" and task["verdict"] == "green"
+        active_tasks = [
+            task
             for task in state["tasks"]
+            if not task["lineage"]["retired"]
+            and not task["lineage"]["revoked"]
+            and task["lineage"]["superseded_by"] is None
+        ]
+        if not pending and not open_escalations and active_tasks and all(
+            task["completion"] == "complete" and task["verdict"] == "green"
+            for task in active_tasks
         ):
             return RunResult("complete", tuple(completed), "all tasks are green")
         if lifecycle is not None and lifecycle.should_drain():

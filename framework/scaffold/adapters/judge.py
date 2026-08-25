@@ -177,8 +177,14 @@ def _judge_command(
     *,
     schema: Mapping[str, Any] = JUDGE_SCHEMA,
     job: str = "judge",
+    allow_tools: bool = True,
 ) -> list[str]:
     if executable == "codex":
+        if not allow_tools:
+            raise ValueError(
+                "codex planner binding is unsupported because this CLI cannot "
+                "disable local tools"
+            )
         if list(binding.args) != ["exec"]:
             raise ValueError(f"codex {job} args must be exactly ['exec']")
         if list(binding.effort_args) != [
@@ -256,7 +262,7 @@ def _judge_command(
             "--no-session-persistence",
             "--no-chrome",
             "--tools",
-            "Read,Glob,Grep",
+            "Read,Glob,Grep" if allow_tools else "",
             "--output-format",
             "json",
             "--json-schema",

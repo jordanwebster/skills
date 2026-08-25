@@ -23,6 +23,7 @@ from .proposal import (
     normalize_claim_proposals,
     normalize_folding,
     normalize_proposal,
+    normalize_proposal_templates,
     normalize_routing_record,
     pending_proposals,
     proposal_batch_id,
@@ -78,6 +79,7 @@ def initial_state(goal: str, *, test_paths: list[str] | None = None) -> dict[str
         "test_paths": paths,
         "plan_digest": None,
         "review_severity_bar": None,
+        "proposal_templates": {},
         "tasks": [],
         "proposals": [],
         "followups": [],
@@ -624,6 +626,7 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
         )
     normalized.setdefault("proposals", [])
     normalized.setdefault("followups", [])
+    normalized.setdefault("proposal_templates", {})
     normalized.setdefault("outbox", [])
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"state schema_version must be {SCHEMA_VERSION}")
@@ -644,6 +647,9 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "state review_severity_bar must be low, medium, high, critical, or null"
         )
+    normalized["proposal_templates"] = normalize_proposal_templates(
+        normalized["proposal_templates"]
+    )
     if not isinstance(normalized.get("tasks"), list):
         raise ValueError("state tasks must be a list")
     normalized["tasks"] = [_normalize_task(task) for task in normalized["tasks"]]
@@ -1124,11 +1130,13 @@ def _apply_plan_imported(
     digest = _required_text(transition, "plan_digest")
     test_paths = transition.get("test_paths")
     review_severity_bar = transition.get("review_severity_bar", "medium")
+    proposal_templates = transition.get("proposal_templates", {})
     tasks = transition.get("tasks")
     candidate = deepcopy(state)
     candidate["plan_digest"] = digest
     candidate["test_paths"] = deepcopy(test_paths)
     candidate["review_severity_bar"] = review_severity_bar
+    candidate["proposal_templates"] = deepcopy(proposal_templates)
     candidate["tasks"] = deepcopy(tasks)
     normalized = _normalize_state(candidate)
     state.clear()
@@ -1314,7 +1322,7 @@ def _apply_proposal_batch_folded(
             if routed_task_id in task_ids:
                 raise InvalidTransition("planned proposal task id already exists")
             task_ids.add(routed_task_id)
-            state["tasks"].append(_task_from_proposal(planned, proposal))
+            state["tasks"].append(_task_from_proposal(state, planned, proposal))
             if proposal["origin"] == "judgment":
                 source = _task_by_id(state, proposal["source_task_id"])
                 if source["id"] in planned["depends_on"]:
@@ -1459,16 +1467,46 @@ def _append_proposal_escalation(
 
 
 def _task_from_proposal(
-    planned: Mapping[str, Any], proposal: Mapping[str, Any]
+    state: Mapping[str, Any],
+    planned: Mapping[str, Any],
+    proposal: Mapping[str, Any],
 ) -> dict[str, Any]:
+    template_id = planned["template"]
+    if template_id == "source-task":
+        if proposal["origin"] != "judgment":
+            raise InvalidTransition(
+                "source-task template is reserved for judgment replacements"
+            )
+        source = _task_by_id(state, proposal["source_task_id"])
+        template = {
+            "role": source["role"],
+            "effort": source["effort"],
+            "check": source["check"],
+            "test_changes": source["test_changes"],
+        }
+    else:
+        try:
+            template = state["proposal_templates"][template_id]
+        except KeyError as error:
+            raise InvalidTransition(
+                f"unknown plan-owned proposal template: {template_id}"
+            ) from error
+    check = template["check"].replace("{task_id}", planned["id"])
     return _normalize_task(
         {
             "schema_version": SCHEMA_VERSION,
-            **deepcopy(dict(planned)),
+            "id": planned["id"],
+            "title": planned["title"],
+            "role": template["role"],
+            "effort": template["effort"],
+            "check": check,
+            "depends_on": deepcopy(planned["depends_on"]),
             "decisions": [
                 *planned["decisions"],
+                f"Plan-owned proposal template: {template_id}",
                 f"Routed from proposal {proposal['id']}: {proposal['rationale']}",
             ],
+            "test_changes": template["test_changes"],
             "attempts": {"work": 0, "infra": 0, "diagnostic": 0},
             "completion": "pending",
             "verdict": None,

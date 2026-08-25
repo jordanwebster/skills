@@ -20,12 +20,9 @@ class DemoPlanner:
                     "task": {
                         "id": "index",
                         "title": "Build the index",
-                        "role": "implementer",
-                        "effort": "small",
-                        "check": "python3 checks/check_file.py index.txt",
+                        "template": "text-artifact",
                         "depends_on": ["source"],
                         "decisions": ["Keep the index text-only."],
-                        "test_changes": False,
                     },
                 },
                 {
@@ -48,7 +45,18 @@ def main() -> int:
     fixture = ProposalFoldingTests(methodName="runTest")
     fixture.setUp()
     try:
-        store = fixture.make_store("demo", [task("source")])
+        store = fixture.make_store(
+            "demo",
+            [task("source")],
+            proposal_templates={
+                "text-artifact": {
+                    "role": "implementer",
+                    "effort": "small",
+                    "check": "python3 checks/check_file.py {task_id}.txt",
+                    "test_changes": False,
+                }
+            },
+        )
         adapter = FakeAdapter(
             fixture.script(
                 "demo",

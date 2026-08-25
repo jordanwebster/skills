@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import patch
 
 from scaffold.__main__ import _init, main
+from scaffold.adapters.judge import _judge_command
 from scaffold.adapters.roster import Roster, RosterAdapter, RosterError
 from scaffold.adapters.process import _run_process
 from scaffold.loop import run_loop
@@ -94,6 +95,28 @@ effort_arg = "-c model_reasoning_effort=<effort>"
             )
             with self.assertRaisesRegex(RosterError, "unknown fields"):
                 Roster(roster_path)
+
+    def test_codex_planner_binding_fails_closed_without_no_tool_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            roster_path = root / "roster.toml"
+            roster_path.write_text(
+                '[default]\ncli="codex"\nargs=["exec"]\n'
+                'model="gpt"\neffort="high"\n'
+                'effort_arg="-c model_reasoning_effort=<effort>"\n',
+                encoding="utf-8",
+            )
+            binding = Roster(roster_path).resolve_default("planner")
+            with self.assertRaisesRegex(ValueError, "cannot disable local tools"):
+                _judge_command(
+                    binding,
+                    "codex",
+                    root,
+                    root / "schema.json",
+                    root / "last.json",
+                    job="planner",
+                    allow_tools=False,
+                )
 
 
 class ProcessGroupTests(unittest.TestCase):
@@ -408,6 +431,8 @@ class RealAdapterFlightTests(unittest.TestCase):
         )
         self.assertEqual("success", transcript["exit_class"])
         self.assertEqual("read-only", transcript["sandbox"])
+        command = transcript["command"]
+        self.assertEqual("", command[command.index("--tools") + 1])
 
     def test_roster_arguments_cannot_override_vendor_sandbox(self) -> None:
         roster_path = self._write_roster("codex")
@@ -592,7 +617,12 @@ class RealAdapterFlightTests(unittest.TestCase):
             f"args = {args}\n"
             f'model = "fixture-model"\n'
             'effort = "high"\n'
-            + effort_arg,
+            + effort_arg
+            + "\n[planner]\n"
+            f'cli = "{self.bin_dir / "claude"}"\n'
+            'args = ["-p"]\n'
+            'model = "fixture-model"\n'
+            'effort = "high"\n',
             encoding="utf-8",
         )
         return roster_path
@@ -664,6 +694,12 @@ class RealAdapterFlightTests(unittest.TestCase):
                     print(json.dumps({{"type": "result", "structured_output": decision}}))
                 raise SystemExit(0)
             if is_planner:
+                if vendor != "claude" or "--tools" not in sys.argv:
+                    print("planner did not use the no-tool Claude binding", file=sys.stderr)
+                    raise SystemExit(10)
+                if sys.argv[sys.argv.index("--tools") + 1] != "":
+                    print("planner retained local tools", file=sys.stderr)
+                    raise SystemExit(11)
                 batch_match = re.search(r'"batch_id": "([^"]+)"', prompt)
                 if batch_match is None or '"id": "fixture-followup"' not in prompt:
                     print("planner omitted its proposal batch", file=sys.stderr)

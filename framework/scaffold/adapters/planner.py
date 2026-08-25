@@ -31,9 +31,7 @@ _PLANNED_TASK_SCHEMA: dict[str, Any] = {
     "properties": {
         "id": {"type": "string", "minLength": 1},
         "title": {"type": "string", "minLength": 1},
-        "role": {"type": "string", "minLength": 1},
-        "effort": {"type": "string", "minLength": 1},
-        "check": {"type": "string", "minLength": 1},
+        "template": {"type": "string", "minLength": 1},
         "depends_on": {
             "type": "array",
             "items": {"type": "string", "minLength": 1},
@@ -42,17 +40,13 @@ _PLANNED_TASK_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string", "minLength": 1},
         },
-        "test_changes": {"type": "boolean"},
     },
     "required": [
         "id",
         "title",
-        "role",
-        "effort",
-        "check",
+        "template",
         "depends_on",
         "decisions",
-        "test_changes",
     ],
 }
 
@@ -142,6 +136,7 @@ class RosterPlanner:
                     raw_last_path,
                     schema=PLANNER_SCHEMA,
                     job="planner",
+                    allow_tools=False,
                 )
                 transcript["command"] = command
                 return_code, timed_out = _run_process(
@@ -213,6 +208,10 @@ def _planner_prompt(
     context = {
         "batch_id": batch_id,
         "goal": state["goal"],
+        "proposal_templates": {
+            name: {"role": value["role"], "effort": value["effort"]}
+            for name, value in state["proposal_templates"].items()
+        },
         "tasks": [
             {
                 "id": task["id"],

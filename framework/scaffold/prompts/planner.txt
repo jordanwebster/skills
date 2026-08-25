@@ -3,7 +3,9 @@ current graph, and pending proposals. Route every proposal exactly once and in t
 given order.
 
 Use in-envelope only when the work directly serves the current flight and can be
-expressed as one objectively checked task. Supply that complete task record. Use
+expressed as one objectively checked task. Select one supplied plan-owned task
+template and supply the remaining task record; never author a command. The reserved
+`source-task` template may be used only for a judgment-origin replacement. Use
 beyond-flight for useful work that should remain an inert follow-up. Use
 envelope-breaking when accepting the proposal would change the flight's promise or
 requires operator judgment. Never edit or retire existing task state yourself; the

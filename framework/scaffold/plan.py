@@ -13,6 +13,7 @@ import re
 import tempfile
 from typing import Any
 
+from .proposal import normalize_proposal_templates
 from .store import SCHEMA_VERSION, Store
 
 
@@ -30,6 +31,7 @@ class ImportedPlan:
     goal: str
     test_paths: list[str]
     review_severity_bar: str
+    proposal_templates: dict[str, dict[str, Any]]
     tasks: list[dict[str, Any]]
     digest: str
 
@@ -117,6 +119,7 @@ def import_plan(store: Store, path: str | Path) -> ImportedPlan:
             "goal": plan.goal,
             "test_paths": plan.test_paths,
             "review_severity_bar": plan.review_severity_bar,
+            "proposal_templates": plan.proposal_templates,
             "tasks": plan.tasks,
             "plan_digest": plan.digest,
         }
@@ -151,6 +154,12 @@ def _normalize_plan(value: Any) -> ImportedPlan:
         raise PlanError(
             "plan review_severity_bar must be low, medium, high, or critical"
         )
+    try:
+        proposal_templates = normalize_proposal_templates(
+            value.get("proposal_templates", {})
+        )
+    except ValueError as error:
+        raise PlanError(str(error)) from error
     raw_tasks = value.get("tasks")
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise PlanError("plan tasks must be a non-empty list")
@@ -160,6 +169,7 @@ def _normalize_plan(value: Any) -> ImportedPlan:
         "goal": goal,
         "test_paths": list(test_paths),
         "review_severity_bar": review_severity_bar,
+        "proposal_templates": proposal_templates,
         "tasks": tasks,
     }
     digest = hashlib.sha256(_canonical_json(machine)).hexdigest()
@@ -167,6 +177,7 @@ def _normalize_plan(value: Any) -> ImportedPlan:
         goal,
         list(test_paths),
         review_severity_bar,
+        proposal_templates,
         tasks,
         digest,
     )

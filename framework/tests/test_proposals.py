@@ -83,7 +83,13 @@ raise SystemExit(0 if exists else 1)
         git(self.product, "add", "README.md", "checks/check_file.py")
         git(self.product, "commit", "--quiet", "-m", "Initialize proposal fixture")
 
-    def make_store(self, name: str, tasks: list[dict[str, object]]) -> Store:
+    def make_store(
+        self,
+        name: str,
+        tasks: list[dict[str, object]],
+        *,
+        proposal_templates: dict[str, dict[str, object]] | None = None,
+    ) -> Store:
         store = Store(self.root / name)
         store.create(initial_state("Build the proposal fixture"))
         plan_path = self.root / f"{name}.html"
@@ -95,6 +101,7 @@ raise SystemExit(0 if exists else 1)
                     "schema_version": 1,
                     "goal": "Build the proposal fixture",
                     "test_paths": ["checks/**"],
+                    "proposal_templates": proposal_templates or {},
                     "tasks": tasks,
                 }
             )
@@ -113,6 +120,14 @@ raise SystemExit(0 if exists else 1)
         store = self.make_store(
             "all-routes",
             [task("source"), task("independent")],
+            proposal_templates={
+                "text-artifact": {
+                    "role": "implementer",
+                    "effort": "small",
+                    "check": "python3 checks/check_file.py {task_id}.txt",
+                    "test_changes": False,
+                }
+            },
         )
 
         class RoutingPlanner:
@@ -141,12 +156,9 @@ raise SystemExit(0 if exists else 1)
                             "task": {
                                 "id": "index",
                                 "title": "Build the index",
-                                "role": "implementer",
-                                "effort": "small",
-                                "check": "python3 checks/check_file.py index.txt",
+                                "template": "text-artifact",
                                 "depends_on": ["source", "independent"],
                                 "decisions": ["Keep the index text-only."],
-                                "test_changes": False,
                             },
                         },
                         {
@@ -241,6 +253,75 @@ raise SystemExit(0 if exists else 1)
                 if row["transition"]["type"] == "proposal-batch-folded"
             ],
         )
+        index = next(item for item in state["tasks"] if item["id"] == "index")
+        self.assertEqual("python3 checks/check_file.py index.txt", index["check"])
+
+    def test_planner_cannot_author_a_check_command(self) -> None:
+        store = self.make_store("planner-check", [task("source")])
+        adapter = FakeAdapter(
+            self.script(
+                "planner-check",
+                [
+                    {
+                        "task_id": "source",
+                        "commit_message": "Build source with proposal",
+                        "writes": {"source.txt": "source\n"},
+                        "proposals": [
+                            {
+                                "id": "unsafe-check",
+                                "title": "Unsafe planner check",
+                                "rationale": "Exercise the command authority boundary.",
+                                "suggested_dependencies": ["source"],
+                            }
+                        ],
+                    }
+                ],
+            ),
+            store,
+        )
+
+        class CommandAuthoringPlanner:
+            def fold(self, state, proposals, batch_id):
+                return {
+                    "schema_version": 1,
+                    "batch_id": batch_id,
+                    "routes": [
+                        {
+                            "proposal_id": "unsafe-check",
+                            "disposition": "in-envelope",
+                            "reason": "Attempt to cross the shell authority boundary.",
+                            "task": {
+                                "id": "unsafe-task",
+                                "title": "Unsafe task",
+                                "role": "implementer",
+                                "effort": "small",
+                                "check": "touch ../escaped",
+                                "depends_on": ["source"],
+                                "decisions": ["This must be rejected."],
+                                "test_changes": False,
+                            },
+                        }
+                    ],
+                }
+
+        result = run_loop(
+            store,
+            self.product,
+            adapter,
+            holder="proposal-worker",
+            planner=CommandAuthoringPlanner(),
+            clock=lambda: 150.0,
+            id_source=lambda: "unsafe-check",
+        )
+
+        self.assertEqual("awaiting-operator", result.status)
+        state = store.load()
+        self.assertNotIn("unsafe-task", [item["id"] for item in state["tasks"]])
+        self.assertEqual(
+            "planning-failed",
+            state["proposals"][0]["routing"]["disposition"],
+        )
+        self.assertFalse((self.root / "escaped").exists())
 
     def test_malformed_planner_parks_batch_once_without_losing_inputs(self) -> None:
         store = self.make_store("malformed", [task("source")])
@@ -339,12 +420,9 @@ raise SystemExit(0 if exists else 1)
                             "task": {
                                 "id": "stuck-slice",
                                 "title": "Build the smaller slice",
-                                "role": "implementer",
-                                "effort": "small",
-                                "check": "python3 checks/check_file.py stuck-slice.txt",
+                                "template": "source-task",
                                 "depends_on": [],
                                 "decisions": ["Replace the broad task."],
-                                "test_changes": False,
                             },
                         }
                     ],
@@ -374,6 +452,31 @@ raise SystemExit(0 if exists else 1)
         self.assertEqual("stuck-slice", stuck["lineage"]["superseded_by"])
         self.assertEqual(["stuck-slice"], successor["depends_on"])
         self.assertEqual(["stuck-slice"], [item["id"] for item in store.ready()])
+
+        completed = run_loop(
+            store,
+            self.product,
+            FakeAdapter(
+                self.script(
+                    "split-completion",
+                    [
+                        {
+                            "task_id": "stuck-slice",
+                            "commit_message": "Build the smaller slice",
+                            "writes": {"stuck.txt": "replacement\n"},
+                        },
+                        {
+                            "task_id": "successor",
+                            "commit_message": "Build the successor",
+                            "writes": {"successor.txt": "successor\n"},
+                        },
+                    ],
+                ),
+                store,
+            ),
+            holder="replacement-worker",
+        )
+        self.assertEqual("complete", completed.status, completed.reason)
 
 
 if __name__ == "__main__":
