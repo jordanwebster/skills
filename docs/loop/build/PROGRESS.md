@@ -23,14 +23,14 @@ next iteration trusts this file over anything else.
       The no-network build environment uses executable local CLI fixtures for
       both vendor contracts; the authenticated-flight proof gap is recorded in
       QUESTIONS.md.
-- [ ] M5 — Judge, outbox, review routing, bless. Check: induced retry-cap and
+- [x] M5 — Judge, outbox, review routing, bless. Check: induced retry-cap and
       ambiguity scenarios produce the right records; a completed review with
       above-bar findings spawns remediation and one re-review, then escalates;
       final demonstrations re-captured at the presented commit; bless
       round-trips. Typed judgment, retry-cap/ambiguity routing, the durable
-      outbox, bounded review routing, and proposal folding are complete;
-      demonstration freshness is complete; bless and candidate-golden
-      graduation remain.
+      outbox, bounded review routing, proposal folding, demonstration
+      freshness, exact-subject acceptance, and candidate-golden graduation
+      are complete. `check.sh` is green for the first time.
 
 ## Iteration log
 
@@ -302,32 +302,38 @@ next iteration trusts this file over anything else.
   cross-family Claude transport. The whole-build check advances monotonically and
   exits 1 with `build incomplete: M5 bless and candidate-golden graduation are not
   implemented`.
+- 2026-08-25 — M5 and the framework build completed in `f1170be` (`Complete
+  M5 blessing and golden graduation`) with the bounded review fix in `2cd595c`
+  (`Close blessing and readiness race`). Ready flights now expose a SHA-256
+  acceptance subject bound to the plan, presented product commit, and exact
+  candidate captures. `scaffold bless --accept SUBJECT` rejects missing or
+  stale acceptance, revalidates every retained capture, and atomically records
+  the terminal acceptance plus a persistent blessed record for every candidate;
+  exact replay is idempotent, and journal replay recovers an interruption before
+  materialized state publication. The independent review reproduced one medium
+  race in which blessing won after a driver's initial state read and the driver
+  attempted a forbidden readiness transition. `2cd595c` makes acceptance win
+  cleanly at the refresh, readiness-publication, and rollback seams and seeds the
+  exact interleaving. A fresh bounded re-check confirmed the fix and found no
+  medium-or-higher issue. The remaining low observations are that the current
+  ready message does not print the machine subject and the blessing proof uses a
+  one-demonstration plan; neither reopens the green milestone. One hundred six
+  stdlib framework tests, the fresh bless-round-trip toy flight, the full
+  repository suite, and the permanent build check pass. `check.sh` now exits 0
+  with `build complete: toy flight and seeded-failure suite are green`.
 
 ## Next
 
-- Continue M5 only: implement bless round-tripping and candidate-golden graduation.
-  Require an explicit operator acceptance of the exact done-pending-bless subject,
-  graduate its fresh candidate demonstrations into the persistent blessed regression
-  set with their `verified_head`, and seed the accepted/refused/restart cases before
-  making `check.sh` green.
-- Preserve demonstration refresh demotion, exact presented-head checks, surface
-  fingerprint invalidation, missing-artifact re-derivation, secret hygiene, bounded
-  regular-file capture, and restore-failure classification. Do not weaken the ten
-  seeded freshness cases or reintroduce authenticated environment inheritance without
-  an explicit credential boundary.
-- Preserve digest-bound proposal batches, claim-carried proposal filing, local inert
-  follow-ups under absent tasks authority, exact typed routing, replacement-task
-  successor rewiring, and fail-safe planner escalation. Workers, judges, and external
-  task storage still never mutate the graph.
-- Preserve review completion independently from findings, read-only reviewer claims,
-  the inclusive plan-time severity bar, atomic finding/graph routing, planned-
-  successor rewiring, plan-owned remediation test scope, and the single re-review
-  limit.
-- Preserve the atomic parked-task/outbox transition, the pre-dispatch retry-cap
-  check, ambiguity's diagnostic accounting, real-adapter ambiguity redaction, and
-  the roster-backed read-only judge's concrete redacted failure input.
-- Preserve the authenticated real-flight proof gap unless a later iteration has
-  explicit network authority; do not weaken the M4 fixture coverage around it or
-  reopen the green milestone for a review finding.
-- Imports currently use `PYTHONPATH=framework`; installation and the stable executable
-  surface remain future milestone work.
+- The M0–M5 framework build is complete. A future unattended build iteration must run
+  `docs/loop/build/check.sh` first; its green result is the terminal signal and must not
+  be moved backward or used to reopen a completed milestone.
+- The build plan's post-framework skill rewording is deliberately not part of this
+  loop: this brief forbids edits under `skills/`. Start that work only under a separate
+  operator-approved task and requirements surface.
+- Preserve the recorded M4 authenticated real-flight proof gap unless a future task has
+  explicit network authority. The local Codex and Claude fixtures remain the accepted
+  contract proof for this no-network build.
+- Low follow-ups, not build blockers: expose the blessing subject through a future
+  operator-facing status/handoff surface, add a multi-demonstration graduation proof if
+  that surface is extended, and install a stable executable instead of relying on
+  `PYTHONPATH=framework` when packaging is separately authorized.
