@@ -95,11 +95,7 @@ def run_loop(
     while True:
         state = store.load()
         if state["phase"] == "accepted":
-            return RunResult(
-                "complete",
-                tuple(completed),
-                "accepted: the exact presented demonstrations are blessed",
-            )
+            return _accepted_result(completed)
         pending = pending_proposals(state)
         open_escalations = [
             item for item in state["outbox"] if item["status"] == "open"
@@ -129,6 +125,14 @@ def run_loop(
                     timeout=dispatch_timeout,
                     clock=observed_time,
                 )
+            except InvalidTransition as error:
+                if store.load()["phase"] == "accepted":
+                    return _accepted_result(completed)
+                return RunResult(
+                    "broken",
+                    tuple(completed),
+                    f"cannot update demonstration readiness: {error}",
+                )
             except (
                 OSError,
                 RuntimeError,
@@ -142,6 +146,8 @@ def run_loop(
                 )
             if not refresh.fresh:
                 return RunResult("blocked", tuple(completed), refresh.reason)
+            if store.load()["phase"] == "accepted":
+                return _accepted_result(completed)
             try:
                 product_changed = (
                     _git(product, ["rev-parse", "HEAD"]).strip()
@@ -165,12 +171,16 @@ def run_loop(
                 state["phase"] != "done-pending-bless"
                 or state["presented_head"] != presented_head
             ):
-                store.apply(
+                transition_result = _apply_readiness_transition(
+                    store,
                     {
                         "type": "demonstrations-ready",
                         "presented_head": presented_head,
-                    }
+                    },
+                    completed,
                 )
+                if transition_result is not None:
+                    return transition_result
             try:
                 product_changed = (
                     _git(product, ["rev-parse", "HEAD"]).strip()
@@ -178,24 +188,32 @@ def run_loop(
                     or bool(_git(product, ["status", "--porcelain"]).strip())
                 )
             except ValueError as error:
-                store.apply(
+                transition_result = _apply_readiness_transition(
+                    store,
                     {
                         "type": "demonstrations-refresh-started",
                         "target_head": presented_head,
-                    }
+                    },
+                    completed,
                 )
+                if transition_result is not None:
+                    return transition_result
                 return RunResult(
                     "blocked",
                     tuple(completed),
                     f"cannot confirm product after readiness was recorded: {error}",
                 )
             if product_changed:
-                store.apply(
+                transition_result = _apply_readiness_transition(
+                    store,
                     {
                         "type": "demonstrations-refresh-started",
                         "target_head": presented_head,
-                    }
+                    },
+                    completed,
                 )
+                if transition_result is not None:
+                    return transition_result
                 return RunResult(
                     "blocked",
                     tuple(completed),
@@ -540,6 +558,32 @@ def run_loop(
                     f"segment {segment}: demonstration capture deferred; "
                     f"{refresh.reason}",
                 )
+
+
+def _accepted_result(completed: Sequence[str]) -> RunResult:
+    return RunResult(
+        "complete",
+        tuple(completed),
+        "accepted: the exact presented demonstrations are blessed",
+    )
+
+
+def _apply_readiness_transition(
+    store: Store,
+    transition: Mapping[str, Any],
+    completed: Sequence[str],
+) -> RunResult | None:
+    try:
+        store.apply(transition)
+    except InvalidTransition as error:
+        if store.load()["phase"] == "accepted":
+            return _accepted_result(completed)
+        return RunResult(
+            "broken",
+            tuple(completed),
+            f"cannot update demonstration readiness: {error}",
+        )
+    return None
 
 
 def _route_judgment(

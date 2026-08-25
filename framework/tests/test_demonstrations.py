@@ -275,6 +275,41 @@ print(value, end="")
         self.assertEqual(accepted, self.store.load())
         self.assertEqual(journal_length, len(self.store.read_journal()))
 
+    def test_concurrent_acceptance_wins_over_redundant_readiness_refresh(self) -> None:
+        import_plan(self.store, self.write_plan())
+        result = self.run_flight()
+        self.assertEqual("complete", result.status, result.reason)
+        ready = self.store.load()
+
+        original_apply = self.store.apply
+
+        def accept_before_refresh_transition(transition):
+            if transition["type"] == "demonstrations-refresh-started":
+                original_apply(
+                    {
+                        "type": "flight-blessed",
+                        "subject": ready["bless_subject"],
+                        "accepted_at": 1234.0,
+                    }
+                )
+            return original_apply(transition)
+
+        with patch.object(
+            self.store,
+            "apply",
+            side_effect=accept_before_refresh_transition,
+        ):
+            resumed = run_loop(
+                self.store,
+                self.product,
+                FakeAdapter(self.write_script(), self.store),
+                holder="fresh-worker",
+            )
+
+        self.assertEqual("complete", resumed.status)
+        self.assertIn("accepted", resumed.reason)
+        self.assertEqual("accepted", self.store.load()["phase"])
+
     def test_restart_replays_blessing_after_materialization_interruption(self) -> None:
         import_plan(self.store, self.write_plan())
         result = self.run_flight()
