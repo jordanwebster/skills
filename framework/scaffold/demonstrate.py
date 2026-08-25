@@ -10,11 +10,13 @@ import json
 import os
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import tempfile
 import time
 from typing import Any
 
+from .adapters.process import _payload_contains_secret, _redact, _worker_environment
 from .store import InvalidTransition, SCHEMA_VERSION, Store
 
 
@@ -49,6 +51,14 @@ def refresh_demonstrations(
     ):
         raise ValueError("demonstration timeout must be positive")
     product = Path(product_root).resolve()
+    state = store.load()
+    if state["phase"] == "done-pending-bless":
+        store.apply(
+            {
+                "type": "demonstrations-refresh-started",
+                "target_head": verified_head,
+            }
+        )
     if _git(product, "rev-parse", "HEAD").strip() != verified_head:
         return RefreshResult(False, "product HEAD changed before capture", ())
     if _git(product, "status", "--porcelain").strip():
@@ -111,6 +121,18 @@ def refresh_demonstrations(
         if not result.fresh:
             return RefreshResult(False, result.reason, tuple(captured))
         captured.append(demonstration_id)
+    if _git(product, "rev-parse", "HEAD").strip() != verified_head:
+        return RefreshResult(
+            False,
+            "product HEAD changed during capture",
+            tuple(captured),
+        )
+    if _git(product, "status", "--porcelain").strip():
+        return RefreshResult(
+            False,
+            "product worktree changed during capture",
+            tuple(captured),
+        )
     return RefreshResult(
         True,
         "every planned demonstration is fresh at the presented commit",
@@ -162,32 +184,24 @@ def _capture(
     captured_at: float,
 ) -> RefreshResult:
     demonstration_id = demonstration["id"]
+    parent_environment = os.environ.copy()
     with tempfile.TemporaryDirectory(prefix="scaffold-demonstrate-") as temporary:
         checkout = Path(temporary) / "candidate"
-        clone = subprocess.run(
-            [
-                "git",
-                "clone",
-                "--quiet",
-                "--no-checkout",
-                "--shared",
-                str(product),
-                str(checkout),
-            ],
-            check=False,
-            capture_output=True,
-            timeout=timeout,
-        )
-        if clone.returncode != 0:
+        try:
+            clone = _clone_checkout(product, checkout, verified_head, timeout)
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             return RefreshResult(
                 False,
-                f"cannot restore demonstration {demonstration_id}: "
-                + _decode_detail(clone.stderr, clone.stdout),
+                f"cannot restore demonstration {demonstration_id}: {error}",
                 (),
             )
-        _git(checkout, "checkout", "--quiet", "--detach", verified_head)
-        _git(checkout, "remote", "remove", "origin")
-        environment = os.environ.copy()
+        if clone is not None:
+            return RefreshResult(
+                False,
+                f"cannot restore demonstration {demonstration_id}: {clone}",
+                (),
+            )
+        environment = _worker_environment(parent_environment, frozenset())
         environment.update(
             {
                 "SCAFFOLD_DEMONSTRATION_ID": demonstration_id,
@@ -207,16 +221,16 @@ def _capture(
                 (),
             )
         if completed.returncode != 0:
-            detail = _decode_detail(completed.stderr, completed.stdout)
+            detail = _decode_detail(
+                _redacted_bytes(completed.stderr, parent_environment),
+                _redacted_bytes(completed.stdout, parent_environment),
+            )
             return RefreshResult(
                 False,
                 f"demonstration {demonstration_id} failed: {detail}",
                 (),
             )
-        if (
-            len(completed.stdout) > _MAX_CAPTURE_BYTES
-            or len(completed.stderr) > _MAX_CAPTURE_BYTES
-        ):
+        if completed.output_too_large:
             return RefreshResult(
                 False,
                 f"demonstration {demonstration_id} transcript exceeds 16 MiB",
@@ -226,24 +240,27 @@ def _capture(
         capture_root = (
             store.root / "demonstrations" / demonstration_id / verified_head
         )
+        safe_stdout = _redacted_bytes(completed.stdout, parent_environment)
+        safe_stderr = _redacted_bytes(completed.stderr, parent_environment)
         outputs = [
             _retain_output(
                 store,
                 capture_root / "stdout.txt",
-                completed.stdout,
+                safe_stdout,
                 kind="stdout",
                 source="",
             ),
             _retain_output(
                 store,
                 capture_root / "stderr.txt",
-                completed.stderr,
+                safe_stderr,
                 kind="stderr",
                 source="",
             ),
         ]
         for relative_name in demonstration["artifact_paths"]:
-            source = (checkout / relative_name).resolve()
+            unresolved_source = checkout / relative_name
+            source = unresolved_source.resolve()
             if os.path.commonpath([checkout.resolve(), source]) != str(
                 checkout.resolve()
             ):
@@ -253,24 +270,47 @@ def _capture(
                     (),
                 )
             try:
-                stat = source.lstat()
-                payload = source.read_bytes()
+                source_stat = unresolved_source.lstat()
             except OSError as error:
                 return RefreshResult(
                     False,
                     f"demonstration artifact is unavailable: {relative_name}: {error}",
                     (),
                 )
-            if source.is_symlink() or not source.is_file():
+            if stat.S_ISLNK(source_stat.st_mode) or not stat.S_ISREG(
+                source_stat.st_mode
+            ):
                 return RefreshResult(
                     False,
                     f"demonstration artifact is not a regular file: {relative_name}",
                     (),
                 )
-            if stat.st_size > _MAX_CAPTURE_BYTES or len(payload) > _MAX_CAPTURE_BYTES:
+            if source_stat.st_size > _MAX_CAPTURE_BYTES:
                 return RefreshResult(
                     False,
                     f"demonstration artifact exceeds 16 MiB: {relative_name}",
+                    (),
+                )
+            try:
+                with unresolved_source.open("rb") as handle:
+                    payload = handle.read(_MAX_CAPTURE_BYTES + 1)
+            except OSError as error:
+                return RefreshResult(
+                    False,
+                    f"demonstration artifact is unavailable: {relative_name}: {error}",
+                    (),
+                )
+            if len(payload) > _MAX_CAPTURE_BYTES:
+                return RefreshResult(
+                    False,
+                    f"demonstration artifact exceeds 16 MiB: {relative_name}",
+                    (),
+                )
+            if _payload_contains_secret(payload, parent_environment):
+                return RefreshResult(
+                    False,
+                    f"demonstration artifact contains a sensitive value: "
+                    f"{relative_name}",
                     (),
                 )
             outputs.append(
@@ -330,6 +370,7 @@ class _ProcessResult:
     stdout: bytes
     stderr: bytes
     timed_out: bool
+    output_too_large: bool
 
 
 def _execute(
@@ -338,35 +379,81 @@ def _execute(
     environment: Mapping[str, str],
     timeout: float,
 ) -> _ProcessResult:
-    process = subprocess.Popen(
-        command,
-        cwd=checkout,
-        shell=True,
-        executable="/bin/sh",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=dict(environment),
-        start_new_session=True,
-    )
-    timed_out = False
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _signal_group(process.pid, signal.SIGTERM)
+    with (
+        tempfile.TemporaryFile() as stdout_handle,
+        tempfile.TemporaryFile() as stderr_handle,
+    ):
+        process = subprocess.Popen(
+            command,
+            cwd=checkout,
+            shell=True,
+            executable="/bin/sh",
+            stdout=stdout_handle,
+            stderr=stderr_handle,
+            env=dict(environment),
+            start_new_session=True,
+        )
+        timed_out = False
         try:
-            stdout, stderr = process.communicate(timeout=1)
+            process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            timed_out = True
+            _signal_group(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                _signal_group(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+        finally:
             _signal_group(process.pid, signal.SIGKILL)
-            stdout, stderr = process.communicate(timeout=5)
-    finally:
-        _signal_group(process.pid, signal.SIGKILL)
+        stdout_handle.seek(0)
+        stderr_handle.seek(0)
+        stdout = stdout_handle.read(_MAX_CAPTURE_BYTES + 1)
+        stderr = stderr_handle.read(_MAX_CAPTURE_BYTES + 1)
+    output_too_large = (
+        len(stdout) > _MAX_CAPTURE_BYTES or len(stderr) > _MAX_CAPTURE_BYTES
+    )
     return _ProcessResult(
         process.returncode,
         stdout or b"",
         stderr or b"",
         timed_out,
+        output_too_large,
     )
+
+
+def _clone_checkout(
+    product: Path,
+    checkout: Path,
+    verified_head: str,
+    timeout: float,
+) -> str | None:
+    clone = subprocess.run(
+        [
+            "git",
+            "clone",
+            "--quiet",
+            "--no-checkout",
+            "--shared",
+            str(product),
+            str(checkout),
+        ],
+        check=False,
+        capture_output=True,
+        timeout=timeout,
+    )
+    if clone.returncode != 0:
+        return "git clone failed: " + _decode_detail(clone.stderr, clone.stdout)
+    _git(checkout, "checkout", "--quiet", "--detach", verified_head)
+    _git(checkout, "remote", "remove", "origin")
+    return None
+
+
+def _redacted_bytes(payload: bytes, environment: Mapping[str, str]) -> bytes:
+    return _redact(
+        payload.decode("utf-8", errors="replace"),
+        environment,
+    ).encode("utf-8")
 
 
 def _retain_output(

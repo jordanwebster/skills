@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
+from unittest.mock import patch
 
 from scaffold.adapters.fake import FakeAdapter
 from scaffold.loop import run_loop
@@ -252,6 +256,167 @@ print(value, end="")
         self.assertIsNone(state["presented_head"])
         self.assertIsNone(state["demonstrations"][0]["candidate"])
         self.assertTrue(all(task["verdict"] == "green" for task in state["tasks"]))
+
+    def test_failed_refresh_demotes_an_earlier_ready_state(self) -> None:
+        import_plan(self.store, self.write_plan())
+        first = self.run_flight()
+        self.assertEqual("complete", first.status, first.reason)
+        (self.product / "first.txt").unlink()
+        git(self.product, "add", "--all")
+        git(self.product, "commit", "--quiet", "-m", "Remove shown surface")
+
+        resumed = run_loop(
+            self.store,
+            self.product,
+            FakeAdapter(self.write_script(), self.store),
+            holder="fresh-worker",
+        )
+
+        self.assertEqual("blocked", resumed.status)
+        self.assertIn("surface paths matched no files", resumed.reason)
+        state = self.store.load()
+        self.assertEqual("working", state["phase"])
+        self.assertIsNone(state["presented_head"])
+
+    def test_capture_excludes_secret_environment_and_redacts_transcript(self) -> None:
+        secret = "sk-fixture-secret-1234567890"
+        import_plan(
+            self.store,
+            self.write_plan(
+                command=(
+                    "python3 -c 'import os; "
+                    'print(os.environ.get("M5_TEST_API_KEY", "missing"))\''
+                ),
+                surface_paths=["README.md"],
+                artifact_paths=[],
+            ),
+        )
+
+        with patch.dict(os.environ, {"M5_TEST_API_KEY": secret}):
+            result = self.run_flight()
+
+        self.assertEqual("complete", result.status, result.reason)
+        retained = b"\n".join(
+            path.read_bytes()
+            for path in (self.store.root / "demonstrations").rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn(secret.encode(), retained)
+        self.assertIn(b"missing", retained)
+
+    def test_sensitive_generated_artifact_is_rejected_without_retention(self) -> None:
+        secret = "sk-fixture-secret-1234567890"
+        secret_source = self.root / "external-secret.txt"
+        secret_source.write_text(secret, encoding="utf-8")
+        import_plan(
+            self.store,
+            self.write_plan(
+                command=(
+                    "python3 -c 'from pathlib import Path; "
+                    f'Path("shown.txt").write_bytes('
+                    f'Path("{secret_source}").read_bytes())\''
+                ),
+                surface_paths=["README.md"],
+            ),
+        )
+
+        with patch.dict(os.environ, {"M5_TEST_API_KEY": secret}):
+            result = self.run_flight()
+
+        self.assertEqual("blocked", result.status)
+        self.assertIn("contains a sensitive value", result.reason)
+        retained = b"\n".join(
+            path.read_bytes()
+            for path in (self.store.root / "demonstrations").rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn(secret.encode(), retained)
+        self.assertIsNone(self.store.load()["demonstrations"][0]["candidate"])
+
+    def test_non_regular_generated_artifact_fails_without_hanging(self) -> None:
+        import_plan(
+            self.store,
+            self.write_plan(
+                command="python3 -c 'import os; os.mkfifo(\"shown.txt\")'",
+                surface_paths=["README.md"],
+            ),
+        )
+
+        result = self.run_flight()
+
+        self.assertEqual("blocked", result.status)
+        self.assertIn("not a regular file", result.reason)
+        self.assertEqual("working", self.store.load()["phase"])
+
+    def test_restore_timeout_becomes_a_blocked_capture_result(self) -> None:
+        import_plan(self.store, self.write_plan())
+
+        with patch(
+            "scaffold.demonstrate._clone_checkout",
+            side_effect=subprocess.TimeoutExpired(["git", "clone"], 1),
+        ):
+            result = self.run_flight()
+
+        self.assertEqual("blocked", result.status)
+        self.assertIn("cannot restore demonstration", result.reason)
+        self.assertIn("timed out", result.reason)
+        self.assertEqual("working", self.store.load()["phase"])
+
+    def test_product_commit_during_final_capture_cannot_leave_ready_state(self) -> None:
+        marker = self.root / "capture-started"
+        command = (
+            "python3 -c 'from pathlib import Path; import time; "
+            f'Path("{marker}").write_text("started"); '
+            "time.sleep(0.5); print(\"shown\")'"
+        )
+        import_plan(
+            self.store,
+            self.write_plan(
+                command=command,
+                surface_paths=["first.txt"],
+                artifact_paths=[],
+            ),
+        )
+        first = self.run_flight()
+        self.assertEqual("complete", first.status, first.reason)
+        marker.unlink()
+        (self.product / "before-race.txt").write_text("before\n", encoding="utf-8")
+        git(self.product, "add", "before-race.txt")
+        git(self.product, "commit", "--quiet", "-m", "Move presented head")
+        thread_errors: list[BaseException] = []
+
+        def commit_during_capture() -> None:
+            try:
+                deadline = time.monotonic() + 5
+                while not marker.is_file():
+                    if time.monotonic() >= deadline:
+                        raise AssertionError("demonstration did not start")
+                    time.sleep(0.01)
+                (self.product / "during-race.txt").write_text(
+                    "during\n", encoding="utf-8"
+                )
+                git(self.product, "add", "during-race.txt")
+                git(self.product, "commit", "--quiet", "-m", "Race capture")
+            except BaseException as error:
+                thread_errors.append(error)
+
+        committer = threading.Thread(target=commit_during_capture)
+        committer.start()
+        result = run_loop(
+            self.store,
+            self.product,
+            FakeAdapter(self.write_script(), self.store),
+            holder="fresh-worker",
+        )
+        committer.join(timeout=10)
+
+        self.assertFalse(committer.is_alive())
+        self.assertEqual([], thread_errors)
+        self.assertEqual("blocked", result.status)
+        self.assertIn("product HEAD changed during capture", result.reason)
+        state = self.store.load()
+        self.assertEqual("working", state["phase"])
+        self.assertIsNone(state["presented_head"])
 
     def test_plan_rejects_escaping_demonstration_paths(self) -> None:
         plan = self.write_plan(surface_paths=["../secret"])

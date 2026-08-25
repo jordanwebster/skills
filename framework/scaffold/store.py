@@ -426,6 +426,8 @@ class Store:
                 _apply_proposal_batch_failed(state, normalized)
             elif transition_type == "demonstration-invalidated":
                 _apply_demonstration_invalidated(state, normalized)
+            elif transition_type == "demonstrations-refresh-started":
+                _apply_demonstrations_refresh_started(state, normalized)
             elif transition_type == "demonstration-captured":
                 self._apply_demonstration_captured(state, normalized)
             elif transition_type == "demonstrations-ready":
@@ -1594,6 +1596,14 @@ def _apply_demonstration_invalidated(
             f"demonstration has no candidate to invalidate: {demonstration_id}"
         )
     demonstration["candidate"] = None
+    state["phase"] = "working"
+    state["presented_head"] = None
+
+
+def _apply_demonstrations_refresh_started(
+    state: dict[str, Any], transition: Mapping[str, Any]
+) -> None:
+    _required_text(transition, "target_head")
     state["phase"] = "working"
     state["presented_head"] = None
 

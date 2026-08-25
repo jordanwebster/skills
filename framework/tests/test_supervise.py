@@ -245,7 +245,7 @@ raise SystemExit(0 if exists else 1)
 
         self.assertIn("you can close this shell", launched.stdout)
         wait_until(
-            lambda: Store(self.workspace).load()["phase"] == "done-pending-bless",
+            lambda: read_status(self.workspace).state == "complete",
             "detached driver did not finish after its launcher exited",
         )
         status = read_status(self.workspace)

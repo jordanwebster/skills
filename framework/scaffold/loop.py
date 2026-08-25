@@ -123,7 +123,12 @@ def run_loop(
                     timeout=dispatch_timeout,
                     clock=observed_time,
                 )
-            except (OSError, RuntimeError, ValueError) as error:
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                subprocess.SubprocessError,
+            ) as error:
                 return RunResult(
                     "blocked",
                     tuple(completed),
@@ -131,6 +136,24 @@ def run_loop(
                 )
             if not refresh.fresh:
                 return RunResult("blocked", tuple(completed), refresh.reason)
+            try:
+                product_changed = (
+                    _git(product, ["rev-parse", "HEAD"]).strip()
+                    != presented_head
+                    or bool(_git(product, ["status", "--porcelain"]).strip())
+                )
+            except ValueError as error:
+                return RunResult(
+                    "blocked",
+                    tuple(completed),
+                    f"cannot confirm product after demonstration capture: {error}",
+                )
+            if product_changed:
+                return RunResult(
+                    "blocked",
+                    tuple(completed),
+                    "product changed before demonstration readiness was recorded",
+                )
             state = store.load()
             if (
                 state["phase"] != "done-pending-bless"
@@ -141,6 +164,36 @@ def run_loop(
                         "type": "demonstrations-ready",
                         "presented_head": presented_head,
                     }
+                )
+            try:
+                product_changed = (
+                    _git(product, ["rev-parse", "HEAD"]).strip()
+                    != presented_head
+                    or bool(_git(product, ["status", "--porcelain"]).strip())
+                )
+            except ValueError as error:
+                store.apply(
+                    {
+                        "type": "demonstrations-refresh-started",
+                        "target_head": presented_head,
+                    }
+                )
+                return RunResult(
+                    "blocked",
+                    tuple(completed),
+                    f"cannot confirm product after readiness was recorded: {error}",
+                )
+            if product_changed:
+                store.apply(
+                    {
+                        "type": "demonstrations-refresh-started",
+                        "target_head": presented_head,
+                    }
+                )
+                return RunResult(
+                    "blocked",
+                    tuple(completed),
+                    "product changed while demonstration readiness was recorded",
                 )
             return RunResult(
                 "complete",
@@ -457,7 +510,12 @@ def run_loop(
                 timeout=dispatch_timeout,
                 clock=observed_time,
             )
-        except (OSError, RuntimeError, ValueError) as error:
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            subprocess.SubprocessError,
+        ) as error:
             _event(
                 store,
                 f"segment {segment}: demonstration capture deferred; {error}",
