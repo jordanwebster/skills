@@ -29,7 +29,8 @@ next iteration trusts this file over anything else.
       final demonstrations re-captured at the presented commit; bless
       round-trips. Typed judgment, retry-cap/ambiguity routing, the durable
       outbox, bounded review routing, and proposal folding are complete;
-      demonstration freshness and bless remain.
+      demonstration freshness is complete; bless and candidate-golden
+      graduation remain.
 
 ## Iteration log
 
@@ -276,16 +277,44 @@ next iteration trusts this file over anything else.
   `gpt-5.6-sol` xhigh fallback and lacks model-family diversity. The whole-build check
   advances monotonically and exits 1 with `build incomplete: M5 demonstration
   freshness and bless are not implemented`.
+- 2026-08-25 — M5 demonstration freshness advanced in `aa2238f` (`Implement
+  M5 demonstration freshness`) with the bounded review fix in `83a7175`
+  (`Close demonstration freshness lifecycle gaps`). Plans now declare replay
+  commands, invalidating product-surface globs, and optional generated files.
+  The loop captures in disposable detached checkouts after green work, journals
+  exact-commit candidates and invalidations, regenerates missing or malformed
+  re-derivable output, and enters done-pending-bless only when every capture is
+  valid at the clean presented product head. The initial independent review
+  reproduced five high/medium defects: raw secret retention, a concurrent-head
+  false-ready race, stale prior readiness after a failed refresh, unbounded or
+  blocking output ingestion, and restore timeouts escaping the result protocol.
+  `83a7175` closes all five by excluding secret-named environment variables,
+  redacting text, rejecting sensitive/non-regular generated files, spooling and
+  bounding output, demoting readiness before refresh, checking the product around
+  the readiness transition, and classifying restore failures as blocked capture.
+  The fresh bounded re-check found no medium-or-higher issue; its sole low finding
+  was this required progress update. The recorded proof gap is that the timeout
+  seed injects at the clone helper and the 16 MiB transcript ceiling is inspected
+  rather than filled, while the FIFO boundary is mechanically seeded. One hundred
+  one stdlib framework tests, the fresh CLI toy flight, and the full repository
+  suite pass. The reviewer used the previously recorded same-family
+  `gpt-5.6-sol` xhigh fallback because the no-network brief precluded the roster's
+  cross-family Claude transport. The whole-build check advances monotonically and
+  exits 1 with `build incomplete: M5 bless and candidate-golden graduation are not
+  implemented`.
 
 ## Next
 
-- Continue M5 only: implement demonstration freshness. Candidate demonstrations must
-  be tagged with the `verified_head` they depict, invalidated when their surface
-  changes, and replayed or regenerated at the exact presented commit before the
-  done-pending-bless ask. Add the seeded freshness and stale-capture cases before
-  moving `check.sh` forward again.
-- After demonstration freshness, implement bless round-tripping and candidate-golden
-  graduation; neither is implemented by this chunk.
+- Continue M5 only: implement bless round-tripping and candidate-golden graduation.
+  Require an explicit operator acceptance of the exact done-pending-bless subject,
+  graduate its fresh candidate demonstrations into the persistent blessed regression
+  set with their `verified_head`, and seed the accepted/refused/restart cases before
+  making `check.sh` green.
+- Preserve demonstration refresh demotion, exact presented-head checks, surface
+  fingerprint invalidation, missing-artifact re-derivation, secret hygiene, bounded
+  regular-file capture, and restore-failure classification. Do not weaken the ten
+  seeded freshness cases or reintroduce authenticated environment inheritance without
+  an explicit credential boundary.
 - Preserve digest-bound proposal batches, claim-carried proposal filing, local inert
   follow-ups under absent tasks authority, exact typed routing, replacement-task
   successor rewiring, and fail-safe planner escalation. Workers, judges, and external
