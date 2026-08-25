@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 import fcntl
+import fnmatch
 import hashlib
 import json
 import math
@@ -80,6 +81,9 @@ def initial_state(goal: str, *, test_paths: list[str] | None = None) -> dict[str
         "plan_digest": None,
         "review_severity_bar": None,
         "proposal_templates": {},
+        "phase": "working",
+        "presented_head": None,
+        "demonstrations": [],
         "tasks": [],
         "proposals": [],
         "followups": [],
@@ -420,6 +424,12 @@ class Store:
                 _apply_proposal_batch_folded(state, normalized)
             elif transition_type == "proposal-batch-failed":
                 _apply_proposal_batch_failed(state, normalized)
+            elif transition_type == "demonstration-invalidated":
+                _apply_demonstration_invalidated(state, normalized)
+            elif transition_type == "demonstration-captured":
+                self._apply_demonstration_captured(state, normalized)
+            elif transition_type == "demonstrations-ready":
+                self._apply_demonstrations_ready(state, normalized)
             else:
                 raise InvalidTransition(
                     f"unsupported transition type: {transition_type}"
@@ -562,6 +572,174 @@ class Store:
             raise InvalidTransition("verification artifact is not valid JSON") from error
         return _normalize_verification(value)
 
+    def read_demonstration_capture(self, demonstration_id: str) -> dict[str, Any]:
+        """Read and validate the retained artifact for one candidate capture."""
+
+        demonstration_id = validate_task_id(demonstration_id)
+        state = self.load()
+        demonstration = _demonstration_by_id(state, demonstration_id)
+        candidate = demonstration["candidate"]
+        if candidate is None:
+            raise InvalidTransition(
+                f"demonstration has no candidate capture: {demonstration_id}"
+            )
+        return self._read_demonstration_artifact(
+            demonstration,
+            candidate["artifact_path"],
+            candidate["artifact_sha256"],
+        )
+
+    def _apply_demonstration_captured(
+        self,
+        state: dict[str, Any],
+        transition: Mapping[str, Any],
+    ) -> None:
+        demonstration_id = _required_text(transition, "demonstration_id")
+        demonstration = _demonstration_by_id(state, demonstration_id)
+        candidate = _normalize_demonstration_candidate(
+            transition.get("candidate")
+        )
+        artifact = self._read_demonstration_artifact(
+            demonstration,
+            candidate["artifact_path"],
+            candidate["artifact_sha256"],
+        )
+        if artifact["verified_head"] != candidate["verified_head"]:
+            raise InvalidTransition(
+                "demonstration artifact names a different verified head"
+            )
+        if artifact["surface_fingerprints"] != candidate["surface_fingerprints"]:
+            raise InvalidTransition(
+                "demonstration artifact surface fingerprints do not match"
+            )
+        demonstration["candidate"] = candidate
+        state["phase"] = "working"
+        state["presented_head"] = None
+
+    def _apply_demonstrations_ready(
+        self,
+        state: dict[str, Any],
+        transition: Mapping[str, Any],
+    ) -> None:
+        presented_head = _required_text(transition, "presented_head")
+        active_tasks = [
+            task
+            for task in state["tasks"]
+            if not task["lineage"]["retired"]
+            and not task["lineage"]["revoked"]
+            and task["lineage"]["superseded_by"] is None
+        ]
+        if not active_tasks or any(
+            task["completion"] != "complete" or task["verdict"] != "green"
+            for task in active_tasks
+        ):
+            raise InvalidTransition(
+                "demonstrations cannot be ready before every active task is green"
+            )
+        if pending_proposals(state):
+            raise InvalidTransition(
+                "demonstrations cannot be ready while proposals await routing"
+            )
+        if any(item["status"] == "open" for item in state["outbox"]):
+            raise InvalidTransition(
+                "demonstrations cannot be ready while operator answers are pending"
+            )
+        for demonstration in state["demonstrations"]:
+            candidate = demonstration["candidate"]
+            if candidate is None or candidate["verified_head"] != presented_head:
+                raise InvalidTransition(
+                    f"demonstration is not fresh at the presented commit: "
+                    f"{demonstration['id']}"
+                )
+            self._read_demonstration_artifact(
+                demonstration,
+                candidate["artifact_path"],
+                candidate["artifact_sha256"],
+            )
+        state["phase"] = "done-pending-bless"
+        state["presented_head"] = presented_head
+
+    def _read_demonstration_artifact(
+        self,
+        demonstration: Mapping[str, Any],
+        relative_name: str,
+        expected_sha256: str,
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+            raise InvalidTransition(
+                "demonstration artifact digest must be a SHA-256 digest"
+            )
+        path = _contained_store_path(self.root, relative_name)
+        try:
+            payload = path.read_bytes()
+        except OSError as error:
+            raise InvalidTransition(
+                f"cannot read demonstration artifact: {error}"
+            ) from error
+        if hashlib.sha256(payload).hexdigest() != expected_sha256:
+            raise InvalidTransition("demonstration artifact digest does not match")
+        try:
+            value = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise InvalidTransition(
+                "demonstration artifact is not valid JSON"
+            ) from error
+        artifact = _normalize_demonstration_artifact(value)
+        if artifact["demonstration_id"] != demonstration["id"]:
+            raise InvalidTransition(
+                "demonstration artifact belongs to a different demonstration"
+            )
+        if artifact["command"] != demonstration["command"]:
+            raise InvalidTransition("demonstration artifact names a different command")
+        if artifact["title"] != demonstration["title"]:
+            raise InvalidTransition("demonstration artifact names a different title")
+        fingerprints = artifact["surface_fingerprints"]
+        if not fingerprints or any(
+            not any(
+                _matches_product_pattern(path, pattern)
+                for pattern in demonstration["surface_paths"]
+            )
+            for path in fingerprints
+        ):
+            raise InvalidTransition(
+                "demonstration artifact fingerprints undeclared surfaces"
+            )
+        stdout_outputs = [
+            output for output in artifact["outputs"] if output["kind"] == "stdout"
+        ]
+        stderr_outputs = [
+            output for output in artifact["outputs"] if output["kind"] == "stderr"
+        ]
+        artifact_outputs = [
+            output
+            for output in artifact["outputs"]
+            if output["kind"] == "artifact"
+        ]
+        if (
+            len(stdout_outputs) != 1
+            or stdout_outputs[0]["source"] != ""
+            or len(stderr_outputs) != 1
+            or stderr_outputs[0]["source"] != ""
+            or {output["source"] for output in artifact_outputs}
+            != set(demonstration["artifact_paths"])
+        ):
+            raise InvalidTransition(
+                "demonstration outputs do not match the planned capture set"
+            )
+        for output in artifact["outputs"]:
+            output_path = _contained_store_path(self.root, output["path"])
+            try:
+                output_payload = output_path.read_bytes()
+            except OSError as error:
+                raise InvalidTransition(
+                    f"cannot read retained demonstration output: {error}"
+                ) from error
+            if len(output_payload) != output["size"]:
+                raise InvalidTransition("demonstration output size does not match")
+            if hashlib.sha256(output_payload).hexdigest() != output["sha256"]:
+                raise InvalidTransition("demonstration output digest does not match")
+        return artifact
+
     @contextmanager
     def _locked(self):
         self.root.mkdir(parents=True, exist_ok=True)
@@ -628,6 +806,9 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
     normalized.setdefault("followups", [])
     normalized.setdefault("proposal_templates", {})
     normalized.setdefault("outbox", [])
+    normalized.setdefault("phase", "working")
+    normalized.setdefault("presented_head", None)
+    normalized.setdefault("demonstrations", [])
     if normalized.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(f"state schema_version must be {SCHEMA_VERSION}")
     if not isinstance(normalized.get("goal"), str) or not normalized["goal"].strip():
@@ -650,6 +831,34 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
     normalized["proposal_templates"] = normalize_proposal_templates(
         normalized["proposal_templates"]
     )
+    if normalized["phase"] not in {"working", "done-pending-bless"}:
+        raise ValueError("state phase must be working or done-pending-bless")
+    if normalized["presented_head"] is not None and (
+        not isinstance(normalized["presented_head"], str)
+        or not normalized["presented_head"]
+    ):
+        raise ValueError("state presented_head must be non-empty text or null")
+    if normalized["phase"] == "working" and normalized["presented_head"] is not None:
+        raise ValueError("a working flight cannot name a presented head")
+    if normalized["phase"] == "done-pending-bless" and (
+        normalized["presented_head"] is None
+    ):
+        raise ValueError("a ready flight must name its presented head")
+    if not isinstance(normalized["demonstrations"], list):
+        raise ValueError("state demonstrations must be a list")
+    normalized["demonstrations"] = [
+        normalize_demonstration(item) for item in normalized["demonstrations"]
+    ]
+    demonstration_ids = [item["id"] for item in normalized["demonstrations"]]
+    if len(set(demonstration_ids)) != len(demonstration_ids):
+        raise ValueError("state demonstration ids must be unique")
+    if normalized["phase"] == "done-pending-bless" and any(
+        demonstration["candidate"] is None
+        or demonstration["candidate"]["verified_head"]
+        != normalized["presented_head"]
+        for demonstration in normalized["demonstrations"]
+    ):
+        raise ValueError("a ready flight requires fresh demonstration candidates")
     if not isinstance(normalized.get("tasks"), list):
         raise ValueError("state tasks must be a list")
     normalized["tasks"] = [_normalize_task(task) for task in normalized["tasks"]]
@@ -726,6 +935,23 @@ def _normalize_state(state: Mapping[str, Any]) -> dict[str, Any]:
             for judgment in task["judgments"]
         ):
             raise ValueError("state outbox lacks its matching task judgment")
+    if normalized["phase"] == "done-pending-bless":
+        active_tasks = [
+            task
+            for task in normalized["tasks"]
+            if not task["lineage"]["retired"]
+            and not task["lineage"]["revoked"]
+            and task["lineage"]["superseded_by"] is None
+        ]
+        if not active_tasks or any(
+            task["completion"] != "complete" or task["verdict"] != "green"
+            for task in active_tasks
+        ):
+            raise ValueError("a ready flight requires every active task to be green")
+        if pending_proposals(normalized):
+            raise ValueError("a ready flight cannot have unrouted proposals")
+        if any(item["status"] == "open" for item in normalized["outbox"]):
+            raise ValueError("a ready flight cannot await an operator answer")
     _canonical_json(normalized)
     return normalized
 
@@ -856,6 +1082,172 @@ def _normalize_task(task: Any) -> dict[str, Any]:
             raise ValueError("task lease must expire after it is acquired")
         normalized["lease"] = dict(lease)
     _canonical_json(normalized)
+    return normalized
+
+
+def normalize_demonstration(value: Any) -> dict[str, Any]:
+    """Normalize one planned demonstration and its optional candidate."""
+
+    required = {
+        "schema_version",
+        "id",
+        "title",
+        "command",
+        "surface_paths",
+        "artifact_paths",
+        "candidate",
+    }
+    if not isinstance(value, Mapping):
+        raise ValueError("each demonstration must be an object")
+    normalized = deepcopy(dict(value))
+    normalized.setdefault("schema_version", SCHEMA_VERSION)
+    normalized.setdefault("artifact_paths", [])
+    normalized.setdefault("candidate", None)
+    if set(normalized) != required:
+        raise ValueError("demonstration has the wrong fields")
+    if normalized["schema_version"] != SCHEMA_VERSION:
+        raise ValueError(
+            f"demonstration schema_version must be {SCHEMA_VERSION}"
+        )
+    validate_task_id(normalized.get("id"))
+    for field in ("title", "command"):
+        _required_text(normalized, field)
+    for field in ("surface_paths", "artifact_paths"):
+        paths = normalized.get(field)
+        if not isinstance(paths, list) or any(
+            not _safe_product_pattern(path) for path in paths
+        ):
+            raise ValueError(
+                f"demonstration {field} must contain safe relative paths"
+            )
+        if len(set(paths)) != len(paths):
+            raise ValueError(f"demonstration {field} must be unique")
+        normalized[field] = list(paths)
+    if not normalized["surface_paths"]:
+        raise ValueError("demonstration surface_paths must not be empty")
+    candidate = normalized.get("candidate")
+    if candidate is not None:
+        normalized["candidate"] = _normalize_demonstration_candidate(candidate)
+    _canonical_json(normalized)
+    return normalized
+
+
+def _normalize_demonstration_candidate(value: Any) -> dict[str, Any]:
+    required = {
+        "verified_head",
+        "artifact_path",
+        "artifact_sha256",
+        "surface_fingerprints",
+        "captured_at",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ValueError("demonstration candidate has the wrong fields")
+    normalized = deepcopy(dict(value))
+    for field in ("verified_head", "artifact_path", "artifact_sha256"):
+        _required_text(normalized, field)
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized["artifact_sha256"]):
+        raise ValueError("demonstration candidate digest must be SHA-256")
+    _validate_relative_path(normalized["artifact_path"], "artifact_path")
+    fingerprints = normalized.get("surface_fingerprints")
+    if not isinstance(fingerprints, Mapping) or any(
+        not _safe_product_pattern(path)
+        or not isinstance(digest, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        for path, digest in fingerprints.items()
+    ):
+        raise ValueError("demonstration candidate surface fingerprints are invalid")
+    normalized["surface_fingerprints"] = dict(fingerprints)
+    captured_at = normalized.get("captured_at")
+    if (
+        isinstance(captured_at, bool)
+        or not isinstance(captured_at, (int, float))
+        or not math.isfinite(captured_at)
+        or captured_at < 0
+    ):
+        raise ValueError("demonstration captured_at must be a finite timestamp")
+    normalized["captured_at"] = float(captured_at)
+    return normalized
+
+
+def _normalize_demonstration_artifact(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "demonstration_id",
+        "title",
+        "command",
+        "verified_head",
+        "surface_fingerprints",
+        "captured_at",
+        "process",
+        "outputs",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise InvalidTransition("demonstration artifact has the wrong fields")
+    normalized = deepcopy(dict(value))
+    if normalized.get("schema_version") != SCHEMA_VERSION:
+        raise InvalidTransition("demonstration artifact schema version is invalid")
+    try:
+        validate_task_id(normalized.get("demonstration_id"))
+        for field in ("title", "command", "verified_head"):
+            _required_text(normalized, field)
+        candidate = _normalize_demonstration_candidate(
+            {
+                "verified_head": normalized["verified_head"],
+                "artifact_path": "placeholder.json",
+                "artifact_sha256": "0" * 64,
+                "surface_fingerprints": normalized["surface_fingerprints"],
+                "captured_at": normalized["captured_at"],
+            }
+        )
+    except ValueError as error:
+        raise InvalidTransition(str(error)) from error
+    normalized["surface_fingerprints"] = candidate["surface_fingerprints"]
+    normalized["captured_at"] = candidate["captured_at"]
+    process = normalized.get("process")
+    if not isinstance(process, Mapping) or set(process) != {
+        "returncode",
+        "timed_out",
+    }:
+        raise InvalidTransition("demonstration process has the wrong fields")
+    if (
+        isinstance(process["returncode"], bool)
+        or not isinstance(process["returncode"], int)
+        or process["returncode"] != 0
+        or process["timed_out"] is not False
+    ):
+        raise InvalidTransition("retained demonstration process did not succeed")
+    outputs = normalized.get("outputs")
+    if not isinstance(outputs, list) or len(outputs) < 2:
+        raise InvalidTransition("demonstration must retain stdout and stderr")
+    normalized_outputs = [_normalize_demonstration_output(item) for item in outputs]
+    paths = [item["path"] for item in normalized_outputs]
+    if len(set(paths)) != len(paths):
+        raise InvalidTransition("demonstration output paths must be unique")
+    normalized["process"] = dict(process)
+    normalized["outputs"] = normalized_outputs
+    return normalized
+
+
+def _normalize_demonstration_output(value: Any) -> dict[str, Any]:
+    required = {"kind", "source", "path", "sha256", "size"}
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise InvalidTransition("demonstration output has the wrong fields")
+    normalized = deepcopy(dict(value))
+    if normalized.get("kind") not in {"stdout", "stderr", "artifact"}:
+        raise InvalidTransition("demonstration output kind is invalid")
+    if not isinstance(normalized.get("source"), str):
+        raise InvalidTransition("demonstration output source must be text")
+    try:
+        _validate_relative_path(normalized.get("path"), "output path")
+    except ValueError as error:
+        raise InvalidTransition(str(error)) from error
+    if not isinstance(normalized.get("sha256"), str) or not re.fullmatch(
+        r"[0-9a-f]{64}", normalized["sha256"]
+    ):
+        raise InvalidTransition("demonstration output digest is invalid")
+    size = normalized.get("size")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise InvalidTransition("demonstration output size is invalid")
     return normalized
 
 
@@ -1099,6 +1491,16 @@ def _task_by_id(state: Mapping[str, Any], task_id: str) -> dict[str, Any]:
     raise InvalidTransition(f"unknown task: {task_id}")
 
 
+def _demonstration_by_id(
+    state: Mapping[str, Any], demonstration_id: str
+) -> dict[str, Any]:
+    demonstration_id = validate_task_id(demonstration_id)
+    for demonstration in state["demonstrations"]:
+        if demonstration["id"] == demonstration_id:
+            return demonstration
+    raise InvalidTransition(f"unknown demonstration: {demonstration_id}")
+
+
 def _required_text(value: Mapping[str, Any], field: str) -> str:
     candidate = value.get(field)
     if not isinstance(candidate, str) or not candidate:
@@ -1119,6 +1521,41 @@ def validate_task_id(value: Any) -> str:
     return value
 
 
+def _safe_product_pattern(value: Any) -> bool:
+    if not isinstance(value, str) or not value or len(value) > 512:
+        return False
+    if "\0" in value or "\\" in value or value.startswith("/"):
+        return False
+    return all(part not in {"", ".", ".."} for part in value.split("/"))
+
+
+def _matches_product_pattern(path: str, pattern: str) -> bool:
+    if fnmatch.fnmatchcase(path, pattern):
+        return True
+    return pattern.startswith("**/") and fnmatch.fnmatchcase(path, pattern[3:])
+
+
+def _validate_relative_path(value: Any, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be non-empty text")
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"{field} must stay inside the store")
+    return value
+
+
+def _contained_store_path(root: Path, relative_name: str) -> Path:
+    try:
+        _validate_relative_path(relative_name, "artifact path")
+    except ValueError as error:
+        raise InvalidTransition(str(error)) from error
+    resolved_root = root.resolve()
+    path = (resolved_root / relative_name).resolve()
+    if os.path.commonpath([resolved_root, path]) != str(resolved_root):
+        raise InvalidTransition("artifact path escapes the store")
+    return path
+
+
 def _apply_plan_imported(
     state: dict[str, Any], transition: Mapping[str, Any]
 ) -> None:
@@ -1137,10 +1574,28 @@ def _apply_plan_imported(
     candidate["test_paths"] = deepcopy(test_paths)
     candidate["review_severity_bar"] = review_severity_bar
     candidate["proposal_templates"] = deepcopy(proposal_templates)
+    candidate["demonstrations"] = deepcopy(
+        transition.get("demonstrations", [])
+    )
     candidate["tasks"] = deepcopy(tasks)
     normalized = _normalize_state(candidate)
     state.clear()
     state.update(normalized)
+
+
+def _apply_demonstration_invalidated(
+    state: dict[str, Any], transition: Mapping[str, Any]
+) -> None:
+    demonstration_id = _required_text(transition, "demonstration_id")
+    _required_text(transition, "reason")
+    demonstration = _demonstration_by_id(state, demonstration_id)
+    if demonstration["candidate"] is None:
+        raise InvalidTransition(
+            f"demonstration has no candidate to invalidate: {demonstration_id}"
+        )
+    demonstration["candidate"] = None
+    state["phase"] = "working"
+    state["presented_head"] = None
 
 
 def _apply_task_released(

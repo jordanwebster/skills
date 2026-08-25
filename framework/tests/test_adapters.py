@@ -568,7 +568,7 @@ class RealAdapterFlightTests(unittest.TestCase):
                 )
 
         self.assertEqual(0, return_code, output.getvalue())
-        self.assertIn("complete: all tasks are green", output.getvalue())
+        self.assertIn("complete: ready for review", output.getvalue())
         self.assertTrue((self.product / "artifact.txt").is_file())
         task = self.store.load()["tasks"][0]
         self.assertEqual("green", task["verdict"])

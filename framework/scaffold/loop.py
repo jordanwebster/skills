@@ -12,6 +12,7 @@ from typing import Any, Callable, Protocol
 import uuid
 
 from .adapters.base import DispatchResult
+from .demonstrate import refresh_demonstrations
 from .judge import Judge, normalize_decision
 from .prompt import assemble_prompt
 from .proposal import Planner, normalize_folding, pending_proposals, proposal_batch_id
@@ -104,11 +105,49 @@ def run_loop(
             and not task["lineage"]["revoked"]
             and task["lineage"]["superseded_by"] is None
         ]
-        if not pending and not open_escalations and active_tasks and all(
+        all_tasks_green = bool(active_tasks) and all(
             task["completion"] == "complete" and task["verdict"] == "green"
             for task in active_tasks
-        ):
-            return RunResult("complete", tuple(completed), "all tasks are green")
+        )
+        if not pending and not open_escalations and all_tasks_green:
+            try:
+                presented_head = _git(product, ["rev-parse", "HEAD"]).strip()
+                if _git(product, ["status", "--porcelain"]).strip():
+                    raise ValueError(
+                        "product worktree is dirty before demonstration capture"
+                    )
+                refresh = refresh_demonstrations(
+                    store,
+                    product,
+                    presented_head,
+                    timeout=dispatch_timeout,
+                    clock=observed_time,
+                )
+            except (OSError, RuntimeError, ValueError) as error:
+                return RunResult(
+                    "blocked",
+                    tuple(completed),
+                    f"cannot refresh final demonstrations: {error}",
+                )
+            if not refresh.fresh:
+                return RunResult("blocked", tuple(completed), refresh.reason)
+            state = store.load()
+            if (
+                state["phase"] != "done-pending-bless"
+                or state["presented_head"] != presented_head
+            ):
+                store.apply(
+                    {
+                        "type": "demonstrations-ready",
+                        "presented_head": presented_head,
+                    }
+                )
+            return RunResult(
+                "complete",
+                tuple(completed),
+                "ready for review: every task is green and every demonstration "
+                "is fresh at the presented commit",
+            )
         if lifecycle is not None and lifecycle.should_drain():
             return RunResult(
                 "drained",
@@ -410,6 +449,33 @@ def run_loop(
             f"segment {segment}: {task['id']} -> {active_binding}; flipped; "
             "verify green",
         )
+        try:
+            refresh = refresh_demonstrations(
+                store,
+                product,
+                claim["candidate_head"],
+                timeout=dispatch_timeout,
+                clock=observed_time,
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            _event(
+                store,
+                f"segment {segment}: demonstration capture deferred; {error}",
+            )
+        else:
+            if refresh.captured_ids:
+                _event(
+                    store,
+                    f"segment {segment}: demonstrations captured at "
+                    f"{claim['candidate_head']}: "
+                    + ",".join(refresh.captured_ids),
+                )
+            elif not refresh.fresh:
+                _event(
+                    store,
+                    f"segment {segment}: demonstration capture deferred; "
+                    f"{refresh.reason}",
+                )
 
 
 def _route_judgment(

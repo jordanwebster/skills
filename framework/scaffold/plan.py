@@ -14,7 +14,7 @@ import tempfile
 from typing import Any
 
 from .proposal import normalize_proposal_templates
-from .store import SCHEMA_VERSION, Store
+from .store import SCHEMA_VERSION, Store, normalize_demonstration
 
 
 PLAN_BLOCK_ID = "scaffold-plan"
@@ -32,6 +32,7 @@ class ImportedPlan:
     test_paths: list[str]
     review_severity_bar: str
     proposal_templates: dict[str, dict[str, Any]]
+    demonstrations: list[dict[str, Any]]
     tasks: list[dict[str, Any]]
     digest: str
 
@@ -120,6 +121,7 @@ def import_plan(store: Store, path: str | Path) -> ImportedPlan:
             "test_paths": plan.test_paths,
             "review_severity_bar": plan.review_severity_bar,
             "proposal_templates": plan.proposal_templates,
+            "demonstrations": plan.demonstrations,
             "tasks": plan.tasks,
             "plan_digest": plan.digest,
         }
@@ -160,6 +162,28 @@ def _normalize_plan(value: Any) -> ImportedPlan:
         )
     except ValueError as error:
         raise PlanError(str(error)) from error
+    raw_demonstrations = value.get("demonstrations", [])
+    if not isinstance(raw_demonstrations, list):
+        raise PlanError("plan demonstrations must be a list")
+    try:
+        demonstrations = [
+            normalize_demonstration(
+                {
+                    **dict(demonstration),
+                    "schema_version": SCHEMA_VERSION,
+                    "candidate": None,
+                }
+            )
+            for demonstration in raw_demonstrations
+            if isinstance(demonstration, dict)
+        ]
+    except ValueError as error:
+        raise PlanError(str(error)) from error
+    if len(demonstrations) != len(raw_demonstrations):
+        raise PlanError("each plan demonstration must be an object")
+    demonstration_ids = [item["id"] for item in demonstrations]
+    if len(set(demonstration_ids)) != len(demonstration_ids):
+        raise PlanError("plan demonstration ids must be unique")
     raw_tasks = value.get("tasks")
     if not isinstance(raw_tasks, list) or not raw_tasks:
         raise PlanError("plan tasks must be a non-empty list")
@@ -170,6 +194,7 @@ def _normalize_plan(value: Any) -> ImportedPlan:
         "test_paths": list(test_paths),
         "review_severity_bar": review_severity_bar,
         "proposal_templates": proposal_templates,
+        "demonstrations": demonstrations,
         "tasks": tasks,
     }
     digest = hashlib.sha256(_canonical_json(machine)).hexdigest()
@@ -178,6 +203,7 @@ def _normalize_plan(value: Any) -> ImportedPlan:
         list(test_paths),
         review_severity_bar,
         proposal_templates,
+        demonstrations,
         tasks,
         digest,
     )

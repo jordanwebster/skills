@@ -53,7 +53,17 @@ raise SystemExit(0 if exists else 1)
 """,
             encoding="utf-8",
         )
-        _git(product, "add", "README.md", "checks/check_file.py")
+        (checks / "show_wrap.py").write_text(
+            """from pathlib import Path
+
+artifact = Path("artifact.txt").read_text(encoding="utf-8")
+wrapped = Path("wrapped.txt").read_text(encoding="utf-8")
+Path("demonstration.txt").write_text(artifact + wrapped, encoding="utf-8")
+print(artifact + wrapped, end="")
+""",
+            encoding="utf-8",
+        )
+        _git(product, "add", "README.md", "checks/check_file.py", "checks/show_wrap.py")
         _git(product, "commit", "--quiet", "-m", "Initialize toy product")
 
         plan = root / "plan.html"
@@ -61,6 +71,15 @@ raise SystemExit(0 if exists else 1)
             "schema_version": 1,
             "goal": "Build and wrap a toy product",
             "test_paths": ["checks/**", "tests/**"],
+            "demonstrations": [
+                {
+                    "id": "show-wrapped-product",
+                    "title": "Show the wrapped toy product",
+                    "command": "python3 checks/show_wrap.py",
+                    "surface_paths": ["artifact.txt", "wrapped.txt"],
+                    "artifact_paths": ["demonstration.txt"],
+                }
+            ],
             "tasks": [
                 {
                     "id": "build",
@@ -139,8 +158,26 @@ raise SystemExit(0 if exists else 1)
             product / "wrapped.txt"
         ).is_file():
             raise AssertionError("toy flight omitted a demonstrated artifact")
+        presented_head = _git(product, "rev-parse", "HEAD").strip()
+        if state["phase"] != "done-pending-bless":
+            raise AssertionError("toy flight did not reach ready-for-review state")
+        if state["presented_head"] != presented_head:
+            raise AssertionError("toy flight presented a different product commit")
+        candidate = state["demonstrations"][0]["candidate"]
+        if candidate is None or candidate["verified_head"] != presented_head:
+            raise AssertionError("toy demonstration is stale at the presented commit")
+        capture = json.loads(
+            (workspace / candidate["artifact_path"]).read_text(encoding="utf-8")
+        )
+        retained_demo = next(
+            workspace / output["path"]
+            for output in capture["outputs"]
+            if output["kind"] == "artifact"
+        )
+        if retained_demo.read_text(encoding="utf-8") != "built\nwrapped\n":
+            raise AssertionError("toy demonstration did not retain the shown output")
 
-    print("toy flight M3 green")
+    print("toy flight M5 demonstration freshness green")
     return 0
 
 

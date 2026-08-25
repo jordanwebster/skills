@@ -245,7 +245,7 @@ raise SystemExit(0 if exists else 1)
 
         self.assertIn("you can close this shell", launched.stdout)
         wait_until(
-            lambda: Store(self.workspace).load()["tasks"][0]["verdict"] == "green",
+            lambda: Store(self.workspace).load()["phase"] == "done-pending-bless",
             "detached driver did not finish after its launcher exited",
         )
         status = read_status(self.workspace)
@@ -305,7 +305,7 @@ raise SystemExit(0 if exists else 1)
             str(resume),
         )
 
-        self.assertIn("complete: all tasks are green", relaunched.stdout)
+        self.assertIn("complete: ready for review", relaunched.stdout)
         task = Store(self.workspace).load()["tasks"][0]
         self.assertEqual("green", task["verdict"])
         self.assertEqual(1, task["attempts"]["infra"])
