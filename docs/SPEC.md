@@ -728,3 +728,31 @@ the reversal was explicit and knowing, not a silent re-litigation.
   evidence but never replaces the showing of a user-visible promise, and
   demonstrations are planned up front and captured by the segment that
   first passes the item, in the context that already has it working.
+
+### 2026-08-26 (rev12) — scaffold retired; autopilot replaces it
+
+Context: two unattended runs under the scaffold skill and its framework
+(a2a, then claude-sdk) spent most of their effort on their own machinery;
+the second produced eighteen dispatched segments, ten control commits, and
+no accepted product work. The controls assumed adversarial workers —
+hidden oracles, read-only tests, per-item evidence manifests, sealed
+drivers — and bugs in that machinery blocked correct product work.
+
+Decisions:
+
+- The scaffold skill, its templates, and the `framework/` package are
+  deleted. The `autopilot` skill replaces them under a cooperative-agent
+  assumption: agents edit tests, commit on one branch, and file tasks
+  directly; the driver enforces only what is cheap and non-adversarial —
+  fresh context per iteration, checks re-run by the driver, attempt
+  accounting, timeouts, one driver per flight.
+- Handoff's accumulation/production split stands. For a flight,
+  accumulation is the branch's commits, task notes, chunk reviews, and
+  the closer's acceptance verdict; production is the flight's own
+  wrap-up page, which is the front page. The bless flow and demonstration
+  manifests are gone; acceptance is the operator's merge.
+- Review completion is distinct from reviewer satisfaction: a chunk review
+  runs once against a plan-fixed must-fix bar with one fix round, and
+  findings below the bar are recorded, never chased.
+- Flight state (`.autopilot/`) is committed on the flight branch and
+  removed at landing, so the merged product carries no flight vocabulary.

@@ -6,9 +6,11 @@ invisible.
 
 - **intake** — alignment before work: turn a vague ask into
   operator-confirmed requirements, every assumption marked row by row.
-- **scaffold** — endurance machinery for work too large for one sitting: an
-  approved plan, a hidden self-versioned workspace, a machine-checked
-  ledger, a bounded unattended run driven by a script.
+- **autopilot** — an unattended loop of fresh agents for work too large
+  for one sitting: a flight plan the operator approves in a browser, a
+  task list agents pull from and add to, one review per chunk, and a final
+  acceptance against the requirements. Roles resolve to models through
+  the delegate roster.
 - **handoff** — high-bandwidth review replacing code review: proofs, an
   independent fresh-context reviewer, and a one-page front page for the
   merge decision. Small self-contained fixes decline it and ship with a

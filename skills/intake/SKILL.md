@@ -117,10 +117,15 @@ put to the operator has its explicit answer. Rows that never demanded their
 own question were approved by the all-ok over the recap where they were
 visible; nothing was approved by going unobjected-to. The confirmed record is durable: attach it to the tracked task if
 a skill named `tasks` is available and the operator authorizes the write;
-otherwise hand it to the operator in conversation and pass it to whatever
-runs next. A confirmed record is the input downstream planning trusts — it
-must stand alone, readable by a fresh context that never saw this
-conversation.
+when an unattended flight will follow (a skill named `autopilot`), hand
+the record to it as a file so the planner and the final acceptance both
+read the same words; otherwise hand it to the operator in conversation
+and pass it to whatever runs next. A confirmed record is the input
+downstream planning trusts — it must stand alone, readable by a fresh
+context that never saw this conversation. Ambiguity that survives intake
+is not resolved later by whoever hits it: downstream agents escalate it
+back to the operator rather than guess, so every open question closed
+here is one the run will not stop on.
 
 Requirements can be confirmed asynchronously: a task the operator has already
 endorsed row by row needs no second intake. Re-open intake only when new

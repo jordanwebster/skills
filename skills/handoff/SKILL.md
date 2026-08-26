@@ -15,10 +15,10 @@ The work falls in two phases that need not share a context or an author.
 **Accumulation** — the outline, evidence, demonstrations, and friction
 gathered while the work happens — belongs to whoever does the work.
 **Production** — freshness, the independent review, the front page —
-belongs to whoever owns presenting the work to the operator. A scaffold
-flight accumulates through its ledger and captured demonstrations and
-plans a dedicated production segment; a single agent doing one task does
-both itself; a foreign branch arrives with no accumulation at all, and
+belongs to whoever owns presenting the work to the operator. An autopilot
+flight accumulates through its commits, task notes, chunk reviews, and
+acceptance verdict, and its wrap-up page is the front page; a single
+agent doing one task does both itself; a foreign branch arrives with no accumulation at all, and
 inbound review is production running alone, reconstructing what
 accumulation should have left behind.
 
@@ -102,14 +102,15 @@ files.
 ## Assemble the handoff
 
 Before writing any proof, inventory the verification the work already
-produced — a scaffold ledger's per-item checks with their `verified_head`
-commits, CI results, committed fixtures and their replay commands. An
+produced — a flight's per-task checks and the commits they passed at, its
+chunk reviews and acceptance verdict, CI results, committed fixtures and
+their replay commands. An
 existing record whose check still replays is evidence: cite it (the claim,
 the check command, the commit it passed at) instead of re-deriving it.
 Author new proofs only for claims no record covers — behavior across the
 seams between separately verified pieces, verification from a clean
 checkout, user-visible walkthroughs, and whatever the records' own gap
-notes name. A handoff that follows a scaffold flight synthesizes the
+notes name. A handoff that follows an autopilot flight synthesizes the
 flight's evidence; it does not re-run the flight.
 
 A citation settles a proof's automated evidence, never its

@@ -38,7 +38,7 @@ links, and MCP registrations remain unchanged.
 A consumer repository has only two pieces of configuration:
 
 1. Copy the trigger sections you want from `templates/AGENTS-handoff.md` and
-   `templates/AGENTS-scaffold.md` into `AGENTS.md`, replacing the machinery
+   `templates/AGENTS-autopilot.md` into `AGENTS.md`, replacing the machinery
    placeholder with the absolute path to this checkout.
 2. Copy `templates/handoff.toml` to `.handoff.toml` at the repository root,
    set the values, and keep it untracked (gitignore it) — standing authority

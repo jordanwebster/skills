@@ -8,6 +8,8 @@
 # The cli/args lines are the fallback transport — a dispatcher
 # running inside a harness of the same family uses its native subagents
 # instead, and a shared agent bus (amux) takes over when configured.
+# An unattended driver always uses cli/args: put the flags an unattended
+# run needs there (claude: a permission mode; codex: a sandbox mode).
 # `default` is required and catches any role tag the roster does not know,
 # so runs and roster can version independently; mismatches are noted in
 # the consuming run's records.
@@ -17,37 +19,37 @@
 
 [default]
 cli = "claude"
-args = ["-p"]
+args = ["-p", "--permission-mode", "auto"]
 model = "opus"
 effort = "high"
 
 [planner]
 cli = "claude"
-args = ["-p"]
+args = ["-p", "--permission-mode", "auto"]
 model = "opus"
 effort = "high"
 
 [implementer]
 cli = "claude"
-args = ["-p"]
+args = ["-p", "--permission-mode", "auto"]
 model = "opus"
 effort = "high"
 
 [prober]
 cli = "claude"
-args = ["-p"]
+args = ["-p", "--permission-mode", "auto"]
 model = "sonnet"
 effort = "medium"
 
 [reviewer]
 cli = "claude"
-args = ["-p"]
+args = ["-p", "--permission-mode", "auto"]
 model = "opus"
 effort = "high"
 
 [reviewer-cross-family]
 cli = "codex"
-args = ["exec"]
+args = ["exec", "--sandbox", "read-only"]
 model = "gpt-5.6-sol"
 effort = "high"
 effort_arg = "-c model_reasoning_effort=<effort>"
@@ -55,15 +57,18 @@ effort_arg = "-c model_reasoning_effort=<effort>"
 # binding satisfies that when the author is claude. Adjust the model to
 # whatever your codex install runs.
 
-[judge]
-cli = "claude"
-args = ["-p"]
-model = "opus"
+[closer]
+cli = "codex"
+args = ["exec", "--sandbox", "workspace-write"]
+model = "gpt-5.6-sol"
 effort = "high"
+effort_arg = "-c model_reasoning_effort=<effort>"
+# Acceptance against the requirements, by a family other than the
+# implementer's when the roster can arrange it.
 
 [ui-developer]
 cli = "claude"
-args = ["-p"]
+args = ["-p", "--permission-mode", "auto"]
 model = "opus"
 effort = "high"
 # Family constraint recorded here by the operator's observation: claude
@@ -71,7 +76,7 @@ effort = "high"
 
 [qa-tester]
 cli = "claude"
-args = ["-p"]
+args = ["-p", "--permission-mode", "auto"]
 model = "haiku"
 effort = "low"
 # Cheap on purpose: naive usage finds what a human would hit.

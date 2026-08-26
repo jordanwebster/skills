@@ -10,8 +10,9 @@ would contradict one instead of making it.
   diagnose, not a slow suite.
 - Never add Co-Authored-By trailers.
 - Shell scripts: `#!/usr/bin/env bash`, compatible with bash 3.2 (macOS
-  default), no dependencies beyond git and POSIX tools. Tests are
-  dependency-free shell under `tests/`, run via `timeout 300 tests/run.sh`.
+  default), no dependencies beyond git and POSIX tools. The autopilot CLI
+  is Python 3.11+ standard library only. Tests run via
+  `timeout 300 tests/run.sh`.
 - Skills follow the open agent-skills standard (`SKILL.md` plus frontmatter
   and bundled scripts or prompts) so one source serves Claude Code and Codex;
   never write harness-specific variants.
@@ -24,7 +25,8 @@ would contradict one instead of making it.
 - `skills/handoff/` — the founding skill and its bundled scripts/prompts.
 - `skills/tasks/` — the backend-independent task seam.
 - `skills/intake/` — requirements alignment before work starts.
-- `skills/scaffold/` — endurance machinery for multi-context goals.
+- `skills/autopilot/` — the unattended flight loop: skill, prompts, plan
+  template, and the `autopilot` CLI under `lib/`.
 - `skills/delegate/` — staffing policy: roles, roster, staffing log.
 - `templates/` — the consumer instruction and configuration footprint.
 - `config/` — the operator's global agent configuration (symlinked by
@@ -33,7 +35,8 @@ would contradict one instead of making it.
 - `docs/OPERATOR-SURFACE.md` — the canonical operator-surface bar and
   decision-row grammar each skill restates.
 - `docs/INSTALL.md` — collection and consumer installation instructions.
-- `tests/` — fixture-repository shell tests.
+- `tests/` — fixture-repository shell tests; `tests/autopilot/` holds the
+  CLI's Python tests, run through `tests/test-autopilot.sh`.
 - `install.sh` — installs every skill into both supported harnesses.
 
 Handoff evidence lives untracked under `.handoff/`; it never enters this

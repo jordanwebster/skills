@@ -1,6 +1,6 @@
 ---
 name: delegate
-description: Staffing policy - resolves role tags (planner, implementer, prober, reviewer, judge, ui-developer, qa-tester) to model bindings via an operator-owned roster, with escalation rules. Use when dispatching work to agents by role.
+description: Staffing policy - resolves role tags (planner, implementer, ui-developer, prober, qa-tester, reviewer, closer) to model bindings via an operator-owned roster, with escalation rules. Use when dispatching work to agents by role.
 ---
 
 # Delegate
@@ -35,15 +35,15 @@ question.
 
 ## The roles
 
-| Role | Contract | Binding guidance |
-| --- | --- | --- |
-| `planner` | Fresh context; reads only confirmed requirements and the substrate; produces the plan | Strongest available; never economize here |
-| `implementer` | Sweeps a context phase of ledger items against a recorded plan | Strong by default; the natural first candidate for cheaper-tier experiments |
-| `prober` | Read-only reconnaissance: substrate probes, captures, corpus sweeps; parallelizable | Mid-tier; volume over brilliance |
-| `reviewer` | Independent review of finished work; never the author; a cross-family check additionally requires a different model family than the author's | High floor |
-| `judge` | Ephemeral forced choice on a trigger (retry cap, stall, revision batch); reads artifacts, decides, records, ends | Strongest available; contexts are tiny |
-| `ui-developer` | User-interface implementation | Family-constrained in practice; record the constraint in the roster, not in prose |
-| `qa-tester` | Pokes at the product like a human: common flows, naive usage; reports what broke and what tooling gaps blocked further testing | Cheap on purpose — a too-clever agent works around rough edges instead of reporting them |
+| Role | Contract | Writes product? | Binding guidance |
+| --- | --- | --- | --- |
+| `planner` | Fresh context; reads only confirmed requirements and the substrate; writes the plan. Also replans: at a retry cap, splits, re-briefs, rebinds, parks, or escalates — never "try again" | no (edits the task list) | Strongest available; never economize here |
+| `implementer` | Pulls ready tasks in a chunk, edits code and tests, commits what passes | yes | Strong by default; the natural first candidate for cheaper-tier experiments |
+| `ui-developer` | Same contract as implementer, for user-interface work | yes | Family-constrained in practice; record the constraint in the roster, not in prose |
+| `prober` | Read-only reconnaissance: substrate probes, captures, corpus sweeps; writes findings | no (fixtures a task asks for excepted) | Mid-tier; volume over brilliance |
+| `qa-tester` | Pokes at the product like a human: common flows, naive usage; reports what broke and files defects as tasks | no | Cheap on purpose — a too-clever agent works around rough edges instead of reporting them |
+| `reviewer` | Reviews one finished chunk against a fixed must-fix bar; files must-fix findings as tasks; never the author; a cross-family check additionally requires a different model family than the author's | no | High floor |
+| `closer` | Judges the finished flight against the confirmed requirements, not the task list; accepts or files the gaps, once | no | Strong, and a different family from the implementer when the roster allows |
 
 qa-tester runs when a change is user-facing; when in doubt, run it — it is
 cheap. The dispatcher owns the environment it is sent into: before
@@ -82,7 +82,7 @@ tag from the plan if one exists (assigned by the planner, visible in the
 staffing shape the operator approved), else the roster's default for the
 role; an unknown value falls back to the roster default and is noted. A
 worker never sets its own effort — effort is always assigned from outside,
-by roster, plan, or a judgment context.
+by roster, plan, or a replanning pass.
 
 A binding names the **mind** — family, model, effort — not how to reach it.
 Transport is the dispatcher's richest available channel for that mind: a
@@ -99,11 +99,10 @@ consuming run's records, never silently rebind.
 ## Escalation
 
 When a dispatch fails at its retry cap and the failure pattern says the
-binding was too weak — mid-task judgment errors, not typos — the judgment
-context escalates in two rungs: first raise effort one step on the same
+binding was too weak — mid-task judgment errors, not typos — the planner escalates in two rungs: first raise effort one step on the same
 model (the cheaper remedy, when the failure smells like too little
 deliberation rather than an incapable mind), then re-dispatch one model
-tier up, each used once and each recorded like any other judgment decision
+tier up, each used once and each recorded like any other replanning decision
 in the consuming run's records. Repeated escalations on a role are a
 roster proposal, put to the operator as a row; they are never a silent
 rebinding.
