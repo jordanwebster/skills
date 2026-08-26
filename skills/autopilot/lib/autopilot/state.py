@@ -1,8 +1,9 @@
 """The flight's durable state: one JSON file, a notes file, and an event log.
 
-Everything a fresh agent needs to continue the flight lives here or in git.
-The file is rewritten atomically on every change so a crash can never leave
-it torn; nothing else about it is clever.
+Everything a fresh agent needs to continue the flight lives under
+`.autopilot/` in the repository, excluded from git so the product's history
+never carries flight vocabulary. The file is rewritten atomically on every
+change so a crash can never leave it torn; nothing else about it is clever.
 """
 
 from __future__ import annotations
@@ -118,6 +119,7 @@ class Flight:
             "escalations": [],
             "iteration": 0,
             "closer_rounds": 0,
+            "dispatches": [],
         }
         self.dir.mkdir(parents=True, exist_ok=True)
         if not self.notes_path.exists():
@@ -336,6 +338,36 @@ class Flight:
 
     def parked_tasks(self) -> list[dict[str, Any]]:
         return [task for task in self.tasks if task["status"] == "parked"]
+
+    # -- dispatch record ------------------------------------------------------
+
+    def record_dispatch(self, role: str, label: str, seconds: float, exit_class: str) -> None:
+        """Keep one line per agent launched, so cost and reliability are visible."""
+
+        record = self.data.setdefault("dispatches", [])
+        if isinstance(record, int):
+            record = self.data["dispatches"] = []
+        record.append({"role": role, "label": label, "seconds": round(seconds), "exit": exit_class})
+
+    def dispatch_count(self) -> int:
+        record = self.data.get("dispatches", [])
+        return len(record) if isinstance(record, list) else int(record)
+
+    def dispatch_summary(self) -> list[dict[str, Any]]:
+        """Dispatches grouped by role and binding, in first-seen order."""
+
+        record = self.data.get("dispatches", [])
+        if not isinstance(record, list):
+            return []
+        rows: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in record:
+            key = (item["role"], item["label"])
+            row = rows.setdefault(key, {"role": item["role"], "label": item["label"], "count": 0, "seconds": 0, "failed": 0})
+            row["count"] += 1
+            row["seconds"] += item.get("seconds", 0)
+            if item.get("exit") != "ok":
+                row["failed"] += 1
+        return list(rows.values())
 
     # -- events --------------------------------------------------------------
 
