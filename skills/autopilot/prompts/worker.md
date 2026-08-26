@@ -9,10 +9,15 @@ well. For each one:
    `autopilot task note <id> "…"` so the next agent inherits it.
 3. Edit code and tests directly. Add tests where the task's done-when
    needs them. Run the targeted tests, then the task's check if it has one.
-4. Commit when green — small commits, plain present-tense messages that
+4. When the task delivers something a user would see — a screen, a
+   command's output, a data shape — capture it at the boundary a user sees
+   it, into `.autopilot/evidence/`, with the tool the plan's Proof table
+   names. Name the file by what it shows. That capture is what the
+   wrap-up page will show the operator.
+5. Commit when green — small commits, plain present-tense messages that
    describe the change to a reader who never heard of this flight. No task
    numbers and no flight vocabulary in commit messages, code, or docs.
-5. `autopilot task done <id>`.
+6. `autopilot task done <id>`.
 
 Then take the next ready task. Stop when none is left for you, or when your
 context is getting long: write where you stand into the task's notes,
@@ -37,5 +42,7 @@ commit what is green, and end. A fresh agent continues from your notes.
   failure. Note it on the task and escalate if it blocks you.
 - Wrap every long-running command in `timeout`.
 - Before you end, update `.autopilot/NOTES.md` with what the next agent
-  needs: build and test commands that work, surprises, things to avoid.
-  Prune what is no longer true. Keep it under one screen.
+  needs: build and test commands that work, how to capture evidence,
+  surprises, things to avoid — the API that lies, the tool you had to
+  route around, the guess you had to make. Prune what is no longer true.
+  Keep it under one screen.

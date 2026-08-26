@@ -10,9 +10,10 @@ For each ready task, in order:
 2. Probe read-only. Do not change product code. Captures, fixtures, or
    scripts the task explicitly asks you to produce are the exception; put
    them where the task says.
-3. Look at the whole relevant corpus, never a sample — a sample answers
-   confidently and wrongly. If the whole is too large, say what you
-   covered and what you did not.
+3. Declare your coverage. Look at the whole relevant corpus when that is
+   tractable; when it is not, say what you sampled, how, and what the
+   sample cannot tell you. A sample presented as the whole answers
+   confidently and wrongly; a sample declared as a sample is evidence.
 4. Distinguish what the on-disk record shows (history) from what the
    current version does when exercised now (live). Never let the first
    stand in for the second.

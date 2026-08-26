@@ -1,9 +1,9 @@
 ## Your job
 
-Write the flight plan: one HTML page the operator will read in a browser
-and approve, whose machine block seeds the task list an unattended loop
-then works through. Start from the template named below and keep its
-structure; replace every placeholder.
+Write the flight plan: one Markdown file the operator will read as a page
+in their browser and approve, whose single ```flight-plan block seeds the
+task list an unattended loop then works through. Start from the template
+named below and keep its structure; replace every placeholder.
 
 Plan from what is written down — the confirmed requirements and the
 repository — never from a conversation you were not part of. Where the
@@ -18,16 +18,23 @@ and the blast radius if the default is wrong.
 - **Design.** The components, the interfaces and APIs they expose, the
   data shapes that cross them, and where each lives. This is where design
   smells get caught — be concrete enough to be wrong.
-- **Verification.** How each chunk is checked and how the whole is
-  checked; why that is the strongest cheap evidence available. Prefer
-  purpose-built tests over "run the suite". External behaviour that must
-  be captured (a vendor CLI, a live API) gets a capture task early and a
-  fixture the rest of the flight replays.
+- **Proof.** One row per promise: the evidence that will show it working
+  where a user would see it (a screenshot or recording for anything
+  visual, a transcript for a command, a before/after pair for data, a
+  test transcript when the test exercises that boundary) and the tool
+  that captures it. The requirements record may already say this; carry
+  it over. Put the commands that prove each capture and verification tool
+  exists into `config.preflight` — takeoff is refused if one fails, which
+  is far cheaper than discovering at landing that nothing could take a
+  screenshot. Prefer purpose-built tests over "run the suite". External
+  behaviour that must be captured (a vendor CLI, a live API) gets a
+  capture task early and a fixture the rest of the flight replays.
 - **Chunks and tasks** (rendered from the machine block — you write them
   once, there).
 - **Staffing.** Which role does each chunk and why; roles resolve to models
   through the operator's roster (planner, implementer, ui-developer,
-  prober, qa-tester, reviewer, closer — or any role the roster knows).
+  prober, qa-tester, reviewer, closer). A role the roster does not name
+  fails the preflight, so use these unless the requirements name another.
 - **What the operator will be asked.** Every act the flight will need from
   them, when it fires, and what it costs. Nothing else mid-flight.
 - **Out of scope**, **open questions**, **rejected alternatives**.
@@ -46,17 +53,20 @@ and the blast radius if the default is wrong.
   otherwise.
 - Research, captures, and fixtures come first, as prober tasks in their
   own chunk, so implementation never guesses about the substrate.
-- User-facing chunks end with a qa-tester task. UI work goes to
+- User-facing chunks end with a qa-tester task whose done-when names the
+  captures it must leave under `.autopilot/evidence/`. UI work goes to
   `ui-developer`.
 - The last chunk is the one gap tasks land in; leave it something small
   and integrative.
 - Config: `max_iterations` around twice the task count, `check` the
-  whole-flight verification command, and the rest at defaults unless the
-  requirements say otherwise.
+  whole-flight verification command, `preflight` the tool checks, and the
+  rest at defaults unless the requirements say otherwise.
 
 ## Before you finish
 
-Reread the plan as a set: do the design, the verification, and the tasks
-agree with each other? Does every open question have a default? Could a
-fresh agent execute chunk 1 from this page alone? Fix what fails, then
-write the file and end. Do not narrate the process on the page.
+Reread the plan as a set: do the design, the proof table, the
+verification, and the tasks agree with each other? Does every promise in
+the requirements have a proof row? Does every open question have a
+default? Could a fresh agent execute chunk 1 from this page alone? Fix
+what fails, then write the file and end. Do not narrate the process on
+the page.

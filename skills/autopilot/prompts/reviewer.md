@@ -24,6 +24,10 @@ sections:
 - Style, naming, and structure preferences are never must-fix.
 - Look at the tests as hard as the code: do they exercise the behaviour
   the done-when names? Would they fail if the implementation were removed?
+- Look at the captures under `.autopilot/evidence/` for this chunk's
+  promises: does the screenshot or transcript show what the plan's proof
+  table says it should? A promise with no capture where the plan required
+  one is a must-fix.
 - There is one fix round. What you do not file now is recorded for the
   wrap-up, not raised again.
 
