@@ -2,10 +2,11 @@
 
 Goal, in the operator's words: <one sentence>
 
-Guarantees — what a user will and will not observe:
+Guarantees — what a user will and will not observe, and how each will be
+shown working at the end:
 
-- You will be able to <observable behavior>.
-- This will not <excluded behavior>.
+- You will be able to <observable behavior>. Shown by: <screenshot / recording / transcript / test at that boundary>, captured with <tool>.
+- This will not <excluded behavior>. Shown by: <evidence>.
 
 Assumptions — largest blast radius first. Small reversible interpretations
 may sit as stated defaults, approved by the final all-ok over the recap;
@@ -23,7 +24,7 @@ Operator acts — everything the operator will be asked to do later, agreed now:
 
 | Act | When it fires | What is asked | Rough cost |
 | --- | --- | --- | --- |
-| <act or none> | <trigger> | <the request, plain words> | <minutes and commands> |
+| <act or none, e.g. install the capture tool a proof needs> | <trigger> | <the request, plain words> | <minutes and commands> |
 
 Waivers — only if the operator explicitly grants one:
 

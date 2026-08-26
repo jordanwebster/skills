@@ -24,8 +24,12 @@ Match the ceremony to the stakes:
 
 Ground defaults in observation, not guesses. When an assumption is checkable
 by reading the substrate — the codebase, the data, the external system —
-check it read-only first and state what was observed. Probe the whole
-relevant corpus, never a sample; a sample answers confidently and wrongly.
+check it read-only first and state what was observed. Declare the
+coverage: inspect the whole relevant corpus when that is tractable, and
+when it is not — too large, remote, changing, costly — say what was
+sampled, how, and what the sample cannot tell you. A sample presented as
+the whole answers confidently and wrongly; a sample declared as a sample
+is evidence.
 
 A running probe does not block the conversation: present the rows it cannot
 change while it runs, and hold back only those that depend on it. And a
@@ -36,7 +40,12 @@ you said, here is what the substrate shows, which is right?
 ## The requirements record
 
 State the operator's intent as observable behavior in the operator's own
-language: what a user will and will not be able to observe. Then list every
+language: what a user will and will not be able to observe — and, for
+each, how it will be shown working at the end: the evidence (a screenshot,
+a recording, a transcript, a test at that boundary) and the tool that
+captures it. That line is the seed of the proof plan downstream work
+keeps; a tool the machine lacks becomes an operator act below, agreed now
+rather than discovered when the evidence is due. Then list every
 assumption as a row with four parts:
 
 1. the question, in plain words;
@@ -55,31 +64,26 @@ and that build is itself an agent-proposed row needing its own yes.
 
 Each row carries its provenance: **operator-stated** (restating something the
 operator said) or **agent-proposed** (something the agent introduced).
-Provenance decides how much attention a row demands — never whether approval
-is explicit, because it always is. An operator-stated interpretation with a
-small, reversible blast radius may sit on the record as a stated default
-without its own question; its approval is the final all-ok, given over a
-recap where it is visible. An agent-proposed expansion — new scope, new
-guarantees, new spend, new authority — always gets its own question and its
-own explicit yes, never bundled. And no third path exists: a decision is
-never stated in passing prose and treated as approved because nobody
-objected. An unanswered question is an open row, not a quiet yes.
+Provenance decides how much of the operator's attention a row takes. An
+operator-stated interpretation with a small, reversible blast radius sits
+on the record as a stated default and is approved by the final all-ok over
+the recap where it is visible. An agent-proposed expansion — new scope, new
+guarantees, new spend, new authority — gets its own question and its own
+yes, never bundled. There is no third path: nothing is approved because
+nobody objected, and an unanswered question is an open row.
 
 Sort rows by blast radius, largest first, and keep them short and scannable;
 a record the operator must scroll and reread has already failed. An
 oversized record is a scope signal, not a longer meeting: propose splitting
 the work and running intake per piece — the split itself an agent-proposed
-row. Not every decision deserves its own question: a reversible choice with
-a small blast radius is a stated default — still written on the record, and
-covered by the explicit final all-ok like everything else; what it never
-demands is an individual mark. Spend the operator's per-row attention where
-reversal is expensive. Nothing, at any size, proceeds on silence alone: the
-all-ok is an act, not an absence of objection. Define every term on the record
-itself. Ask a genuine free-form question only when no default is safe.
+row. Spend the operator's per-row attention where reversal is expensive.
+Define every term on the record itself. Ask a genuine free-form question
+only when no default is safe.
 
 Include a row for anything the operator will be asked to do later — an
-account to authorize, a command only they may run, a review they must give —
-so all operator involvement is agreed and priced up front. For greenfield
+account to authorize, a command only they may run, a review they must
+give, a capture tool to install — so all operator involvement is agreed
+and priced up front. For greenfield
 work, include a workspace row (default: a new repository under a location the
 operator names or `~/source/<name>`). If the operator wants downstream work
 to run without further review — for example, skipping a later plan
@@ -113,9 +117,7 @@ trusts.
 ## Completion
 
 Intake is complete when the final all-ok has been given and every question
-put to the operator has its explicit answer. Rows that never demanded their
-own question were approved by the all-ok over the recap where they were
-visible; nothing was approved by going unobjected-to. The confirmed record is durable: attach it to the tracked task if
+put to the operator has its explicit answer. The confirmed record is durable: attach it to the tracked task if
 a skill named `tasks` is available and the operator authorizes the write;
 when an unattended flight will follow (a skill named `autopilot`), hand
 the record to it as a file so the planner and the final acceptance both
