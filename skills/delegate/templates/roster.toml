@@ -10,18 +10,12 @@
 # instead, and a shared agent bus (amux) takes over when configured.
 # An unattended driver always uses cli/args: put the flags an unattended
 # run needs there (claude: a permission mode; codex: a sandbox mode).
-# `default` is required and catches any role tag the roster does not know,
-# so runs and roster can version independently; mismatches are noted in
-# the consuming run's records.
+# A role the roster does not name is an error at dispatch, never a silent
+# substitution; `autopilot preflight` checks every role a plan uses, that
+# each CLI is installed, and that each binding actually launches.
 #
 # There is deliberately no oracle or answer-key role: verification authority
 # is the operator's personally and is not a staffing question.
-
-[default]
-cli = "claude"
-args = ["-p", "--permission-mode", "auto"]
-model = "opus"
-effort = "high"
 
 [planner]
 cli = "claude"

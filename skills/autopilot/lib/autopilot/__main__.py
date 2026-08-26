@@ -14,7 +14,7 @@ import sys
 import time
 from typing import Any
 
-from . import gitops, prompt, render, supervise
+from . import gitops, preflight, prompt, render, supervise
 from .dispatch import run_agent
 from .loop import Driver
 from .plan import PlanError, read_plan, seed_flight
@@ -55,9 +55,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-open", action="store_true")
     p.set_defaults(handler=cmd_plan)
 
-    p = sub.add_parser("start", help="seed tasks from the plan and launch the driver")
+    p = sub.add_parser("preflight", help="check roles, CLIs, tools, and one real dispatch per binding")
+    p.add_argument("--no-smoke", action="store_true", help="skip the real dispatch per binding")
+    p.set_defaults(handler=cmd_preflight)
+
+    p = sub.add_parser("start", help="preflight, seed tasks from the plan, and launch the driver")
     p.add_argument("--foreground", action="store_true", help="run in this terminal instead of detached")
     p.add_argument("--max-iterations", type=int, help="override the plan's iteration ceiling")
+    p.add_argument("--no-smoke", action="store_true", help="preflight without the real dispatch per binding")
+    p.add_argument("--no-preflight", action="store_true", help="skip the preflight entirely")
     p.set_defaults(handler=cmd_start)
 
     p = sub.add_parser("drive", help=argparse.SUPPRESS)
@@ -275,10 +281,29 @@ def _render_plan(flight: Flight) -> Path:
     return flight.plan_page_path
 
 
+def _preflight(flight: Flight, *, smoke: bool) -> bool:
+    plan = read_plan(flight.plan_path)
+    checks = preflight.run(flight, plan, Roster(), smoke=smoke)
+    print("Preflight:")
+    print(preflight.report(checks))
+    failed = [check for check in checks if not check.ok]
+    flight.event(f"preflight: {len(checks) - len(failed)}/{len(checks)} checks passed" + ("" if smoke else " (no smoke)"))
+    if failed:
+        print(f"{len(failed)} check(s) failed; fix the roster, the machine, or the plan, then start again.")
+        return False
+    return True
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    return 0 if _preflight(_flight(), smoke=not args.no_smoke) else 1
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     flight = _flight()
     if flight.data["status"] == "landed":
         raise StateError("this flight has landed; start a new flight for new work")
+    if not args.no_preflight and not _preflight(flight, smoke=not args.no_smoke):
+        return 1
     if not flight.tasks:
         seed_flight(flight, read_plan(flight.plan_path))
         flight.event(f"seeded {len(flight.tasks)} tasks in {len(flight.chunks)} chunks from the plan")
@@ -333,6 +358,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"Branch:  {flight.data['branch']}")
     live = "alive" if driver.alive else "not running"
     print(f"Flight:  {flight.data['status']} · iteration {flight.data['iteration']}/{flight.config['max_iterations']} · driver {live} ({driver.reason})")
+    summary = flight.dispatch_summary()
+    if summary:
+        parts = []
+        for row in summary:
+            failed = f", {row['failed']} failed" if row["failed"] else ""
+            parts.append(f"{row['role']} {row['count']} via {row['label']} ({render.duration(row['seconds'])}{failed})")
+        print(f"Agents:  {flight.dispatch_count()} dispatched — " + " · ".join(parts))
     print("Chunks:")
     for chunk in flight.chunks:
         tasks = flight.chunk_tasks(chunk["id"])

@@ -10,7 +10,7 @@ from autopilot.roster import Binding
 
 
 def binding(cli: str, *args: str) -> Binding:
-    return Binding(role="implementer", cli=cli, args=tuple(args), model="m", effort="", effort_args=(), used_default=False)
+    return Binding(role="implementer", cli=cli, args=tuple(args), model="m", effort="", effort_args=())
 
 
 class DispatchTests(unittest.TestCase):
@@ -71,9 +71,9 @@ class DispatchTests(unittest.TestCase):
         self.assertIn("exceeded", output)
 
     def test_vendor_commands(self) -> None:
-        claude = Binding("implementer", "claude", ("-p",), "opus", "high", (), False)
+        claude = Binding("implementer", "claude", ("-p",), "opus", "high", ())
         self.assertEqual(dispatch.build_command(claude, self.dir), ["claude", "-p", "--model", "opus", "--effort", "high"])
-        codex = Binding("reviewer", "codex", ("exec",), "gpt", "high", ("-c", "model_reasoning_effort=high"), False)
+        codex = Binding("reviewer", "codex", ("exec",), "gpt", "high", ("-c", "model_reasoning_effort=high"))
         command = dispatch.build_command(codex, self.dir)
         self.assertEqual(command[:4], ["codex", "-a", "never", "exec"])
         self.assertEqual(command[-1], "-")

@@ -61,13 +61,15 @@ def task(task_id: int, title: str, *, chunk: int = 1, depends_on: list[int] | No
     }
 
 
-def write_roster(path: Path) -> Path:
+ROLES = ("planner", "implementer", "ui-developer", "prober", "qa-tester", "reviewer", "closer")
+
+
+def write_roster(path: Path, roles: tuple[str, ...] = ROLES, *, cli: str = "python3") -> Path:
     path.write_text(
-        "[default]\n"
-        'cli = "python3"\n'
-        f'args = ["{FAKE_AGENT}"]\n'
-        'model = "fake"\n'
-        'effort = "low"\n'
+        "".join(
+            f"[{role}]\ncli = \"{cli}\"\nargs = [\"{FAKE_AGENT}\"]\nmodel = \"fake\"\neffort = \"low\"\n\n"
+            for role in roles
+        )
     )
     return path
 

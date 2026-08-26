@@ -22,10 +22,15 @@ Copy `templates/roster.toml` there to start. Each entry binds a role to a
 CLI invocation, model, and effort; an entry may also record `effort_arg`,
 the exact flag or config key its CLI accepts effort through (codex:
 `-c model_reasoning_effort=<effort>`), so a dispatcher never needs per-CLI
-knowledge. The roster always carries a `default`
-binding: a role tag that matches no entry dispatches on `default` and the
-mismatch is noted in the consuming run's records, so runs and roster can
-version independently.
+knowledge. A role tag that matches no entry is an error, never a silent
+substitution: an unattended run must fail before it starts on a typo, not
+run a task on whatever model happened to be first.
+
+CLI flags and model names age. `autopilot preflight` is the roster's
+doctor: it resolves every role a plan will dispatch, checks each CLI is
+installed, and launches each distinct binding once with a trivial prompt —
+the only way to learn that a recorded flag is still accepted. Run it after
+editing the roster; `autopilot start` runs it before every takeoff.
 
 Agents propose roster changes as rows for the operator's explicit yes —
 each row its own yes, never inferred from one successful flight. The roster
@@ -58,9 +63,8 @@ tooling gaps it hits are filed as inert task entries through a skill named
 ## Dispatch
 
 A driver or dispatcher consuming delegate does exactly this per dispatch:
-read the work item's role tag; look it up in the roster (falling back to
-`default`, noted); launch the bound mind with the prompt its own machinery
-assembled. Delegate never authors prompts and never selects work.
+read the work item's role tag; look it up in the roster; launch the bound
+mind with the prompt its own machinery assembled. Delegate never authors prompts and never selects work.
 
 A brief dispatched into a repository whose own instructions trigger a
 review skill states who owns that review — a sub-agent must never have to
@@ -79,9 +83,8 @@ chased; a round producing only below-bar findings ends the loop.
 
 Effort resolves in the same mechanical order as the role: a phase's effort
 tag from the plan if one exists (assigned by the planner, visible in the
-staffing shape the operator approved), else the roster's default for the
-role; an unknown value falls back to the roster default and is noted. A
-worker never sets its own effort — effort is always assigned from outside,
+staffing shape the operator approved), else the roster's effort for the
+role. A worker never sets its own effort — effort is always assigned from outside,
 by roster, plan, or a replanning pass.
 
 A binding names the **mind** — family, model, effort — not how to reach it.

@@ -2,8 +2,8 @@
 
 The roster file is owned by the operator (see the `delegate` skill). This
 module only looks roles up; it never decides staffing. A role the roster
-does not know falls back to `default`, and the fallback is reported so it
-shows up in the flight's event log.
+does not know is an error, not a fallback: an unattended flight must fail
+before takeoff on a typo, never quietly run a task on the wrong model.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any
 
 
 class RosterError(ValueError):
-    """Raised when the roster is missing or a binding is malformed."""
+    """Raised when the roster is missing, malformed, or lacks a role."""
 
 
 @dataclass(frozen=True)
@@ -28,11 +28,16 @@ class Binding:
     model: str
     effort: str
     effort_args: tuple[str, ...]
-    used_default: bool
 
     @property
     def label(self) -> str:
         return f"{Path(self.cli).name}/{self.model}/{self.effort}"
+
+    @property
+    def key(self) -> tuple[str, tuple[str, ...], str, str]:
+        """What makes two bindings the same launch, whatever role names them."""
+
+        return (self.cli, self.args, self.model, self.effort)
 
 
 def roster_path(explicit: str | Path | None = None) -> Path:
@@ -50,13 +55,20 @@ class Roster:
                 value = tomllib.load(handle)
         except (OSError, tomllib.TOMLDecodeError) as error:
             raise RosterError(f"cannot read delegate roster {self.path}: {error}") from error
-        if not isinstance(value, dict) or "default" not in value:
-            raise RosterError(f"delegate roster {self.path} must contain a [default] binding")
+        if not isinstance(value, dict) or not value:
+            raise RosterError(f"delegate roster {self.path} names no roles")
         self._bindings = {role: _normalize(role, binding) for role, binding in value.items()}
 
+    @property
+    def roles(self) -> list[str]:
+        return list(self._bindings)
+
     def resolve(self, role: str, effort: str | None = None) -> Binding:
-        used_default = role not in self._bindings
-        selected = self._bindings["default" if used_default else role]
+        if role not in self._bindings:
+            raise RosterError(
+                f"role {role!r} is not in the roster {self.path} (roles: {', '.join(self.roles)})"
+            )
+        selected = self._bindings[role]
         chosen_effort = effort or selected["effort"]
         template = selected.get("effort_arg")
         effort_args: tuple[str, ...] = ()
@@ -69,7 +81,6 @@ class Roster:
             model=selected["model"],
             effort=chosen_effort,
             effort_args=effort_args,
-            used_default=used_default,
         )
 
 

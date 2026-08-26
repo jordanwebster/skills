@@ -221,13 +221,13 @@ def dispatch_table(flight: Flight) -> str:
     for row in rows:
         parts.append(
             f"<tr><td>{html.escape(row['role'])}</td><td><code>{html.escape(row['label'])}</code></td>"
-            f"<td>{row['count']}</td><td>{_duration(row['seconds'])}</td><td>{row['failed'] or ''}</td></tr>"
+            f"<td>{row['count']}</td><td>{duration(row['seconds'])}</td><td>{row['failed'] or ''}</td></tr>"
         )
     parts.append("</table>")
     return "\n".join(parts)
 
 
-def _duration(seconds: float) -> str:
+def duration(seconds: float) -> str:
     seconds = int(seconds)
     if seconds < 60:
         return f"{seconds}s"

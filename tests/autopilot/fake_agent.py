@@ -8,6 +8,8 @@ failure modes the loop must handle:
   [badcheck]    mark done with output that fails the task's check
   [escalate]    raise an escalation instead of working, once
   [stall]       exit without touching anything
+
+A preflight smoke prompt gets the word "ok" and nothing else.
 """
 
 from __future__ import annotations
@@ -96,6 +98,9 @@ def replan(prompt: str) -> None:
 
 def main() -> int:
     prompt = sys.stdin.read()
+    if "connectivity check" in prompt:
+        print("ok")
+        return 0
     if os.environ.get("FAKE_SLEEP"):
         time.sleep(float(os.environ["FAKE_SLEEP"]))
     if os.environ.get("FAKE_INFRA"):
