@@ -21,6 +21,13 @@ done
 [ -d "$repo_root/skills/autopilot" ] || fail "installer test requires the autopilot skill"
 [ -d "$repo_root/skills/tasks" ] || fail "installer test requires the tasks skill"
 
+command_count=0
+for skill_path in "$repo_root"/skills/*; do
+    [ -x "$skill_path/scripts/${skill_path##*/}" ] || continue
+    command_count=$((command_count + 1))
+done
+[ "$command_count" -ge 2 ] || fail "installer test expects autopilot and tasks to ship commands"
+
 run_installer() {
     claude_dir=$1
     agents_dir=$2
@@ -28,7 +35,17 @@ run_installer() {
     HOME="$test_home" \
         HANDOFF_CLAUDE_SKILLS_DIR="$claude_dir" \
         HANDOFF_AGENTS_SKILLS_DIR="$agents_dir" \
+        SKILLS_BIN_DIR="${claude_dir%/*}/bin" \
         "$repo_root/install.sh" "$@"
+}
+
+assert_command_link() {
+    bin_root=$1
+    skill_name=$2
+    [ -L "$bin_root/$skill_name" ] || fail "$bin_root/$skill_name must be a symlink"
+    [ "$bin_root/$skill_name" -ef "$repo_root/skills/$skill_name/scripts/$skill_name" ] || \
+        fail "$bin_root/$skill_name must resolve to the skill's command"
+    [ -x "$bin_root/$skill_name" ] || fail "$bin_root/$skill_name must be executable"
 }
 
 assert_skill_link() {
@@ -65,7 +82,12 @@ fresh_claude=$scratch/fresh/claude-skills
 fresh_agents=$scratch/fresh/agents-skills
 fresh_output=$(run_installer "$fresh_claude" "$fresh_agents")
 assert_all_links "$fresh_claude" "$fresh_agents"
-expected_link_total=$((skill_count * 2))
+assert_command_link "$scratch/fresh/bin" autopilot
+assert_command_link "$scratch/fresh/bin" tasks
+[ ! -e "$scratch/fresh/bin/handoff" ] || fail "handoff ships no command of its own"
+printf '%s\n' "$fresh_output" | grep -q "NOTE: $scratch/fresh/bin is not on your PATH" || \
+    fail "install must say when the command directory is not on PATH"
+expected_link_total=$((skill_count * 2 + command_count))
 printf '%s\n' "$fresh_output" | grep -q "Links created: $expected_link_total" || \
     fail "fresh install summary must count every created link"
 
@@ -102,16 +124,18 @@ assert_skill_link "$autopilot_claude" autopilot
 assert_skill_link "$autopilot_agents" autopilot
 printf '%s\n' "$autopilot_install_output" | grep -q 'Skills: autopilot' || \
     fail "selective install summary must name autopilot"
-printf '%s\n' "$autopilot_install_output" | grep -q 'Links created: 2' || \
-    fail "selective autopilot install must create one link per harness"
+printf '%s\n' "$autopilot_install_output" | grep -q 'Links created: 3' || \
+    fail "selective autopilot install must create one link per harness plus the command"
+assert_command_link "$scratch/autopilot/bin" autopilot
 
 autopilot_uninstall_output=$(
     run_installer "$autopilot_claude" "$autopilot_agents" --uninstall autopilot
 )
 printf '%s\n' "$autopilot_uninstall_output" | grep -q 'Skills: autopilot' || \
     fail "selective uninstall summary must name autopilot"
-printf '%s\n' "$autopilot_uninstall_output" | grep -q 'Links removed: 2' || \
-    fail "selective autopilot uninstall must remove one link per harness"
+printf '%s\n' "$autopilot_uninstall_output" | grep -q 'Links removed: 3' || \
+    fail "selective autopilot uninstall must remove one link per harness plus the command"
+[ ! -L "$scratch/autopilot/bin/autopilot" ] || fail "selective autopilot uninstall must remove the command link"
 [ ! -e "$autopilot_claude/autopilot" ] && [ ! -L "$autopilot_claude/autopilot" ] || \
     fail "selective autopilot uninstall must remove the Claude link"
 [ ! -e "$autopilot_agents/autopilot" ] && [ ! -L "$autopilot_agents/autopilot" ] || \

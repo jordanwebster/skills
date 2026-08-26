@@ -160,6 +160,10 @@ fi
 
 claude_skills_dir=${HANDOFF_CLAUDE_SKILLS_DIR:-"${HOME:?HOME is required when HANDOFF_CLAUDE_SKILLS_DIR is unset}/.claude/skills"}
 agents_skills_dir=${HANDOFF_AGENTS_SKILLS_DIR:-"${HOME:?HOME is required when HANDOFF_AGENTS_SKILLS_DIR is unset}/.agents/skills"}
+# A skill that ships a command named after itself (skills/<name>/scripts/<name>)
+# also gets that command linked onto the operator's PATH, so the commands the
+# skills print — `autopilot status`, `tasks list` — work in a plain shell.
+bin_dir=${SKILLS_BIN_DIR:-"${HOME:?HOME is required when SKILLS_BIN_DIR is unset}/.local/bin"}
 
 links_created=0
 links_correct=0
@@ -232,12 +236,15 @@ uninstall_link() {
 selected_index=0
 while [ "$selected_index" -lt "$selected_count" ]; do
     skill_path=${selected_paths[$selected_index]}
+    command_path=$skill_path/scripts/${skill_path##*/}
     if [ "$action" = install ]; then
         install_link "$skill_path" "$claude_skills_dir"
         install_link "$skill_path" "$agents_skills_dir"
+        [ -x "$command_path" ] && install_link "$command_path" "$bin_dir"
     else
         uninstall_link "$skill_path" "$claude_skills_dir"
         uninstall_link "$skill_path" "$agents_skills_dir"
+        [ -x "$command_path" ] && uninstall_link "$command_path" "$bin_dir"
     fi
     selected_index=$((selected_index + 1))
 done
@@ -260,6 +267,11 @@ else
     echo "  Links already absent: $links_absent"
     echo "  Links left untouched: $links_untouched"
 fi
+echo "  Commands: $bin_dir"
+case ":${PATH:-}:" in
+    *":$bin_dir:"*) ;;
+    *) [ "$action" = install ] && echo "  NOTE: $bin_dir is not on your PATH; add it so the commands work in a shell" ;;
+esac
 echo "  Consumer repo setup: $repo_root/docs/INSTALL.md"
 
 if [ "$action" = install ] && [ "$links_refused" -gt 0 ]; then
