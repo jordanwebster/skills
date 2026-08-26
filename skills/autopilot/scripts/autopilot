@@ -2,6 +2,15 @@
 # Launcher for the autopilot CLI. Resolves the skill directory through any
 # symlink so the same file works installed or from a checkout.
 set -euo pipefail
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+script=$0
+while [ -L "$script" ]; do
+    script_dir=$(CDPATH= cd -- "$(dirname -- "$script")" && pwd -P)
+    target=$(readlink "$script")
+    case $target in
+        /*) script=$target ;;
+        *) script=$script_dir/$target ;;
+    esac
+done
+here=$(CDPATH= cd -- "$(dirname -- "$script")" && pwd -P)
 export PYTHONPATH="$here/../lib${PYTHONPATH:+:$PYTHONPATH}"
 exec python3 -m autopilot "$@"

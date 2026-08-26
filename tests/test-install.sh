@@ -46,6 +46,8 @@ assert_command_link() {
     [ "$bin_root/$skill_name" -ef "$repo_root/skills/$skill_name/scripts/$skill_name" ] || \
         fail "$bin_root/$skill_name must resolve to the skill's command"
     [ -x "$bin_root/$skill_name" ] || fail "$bin_root/$skill_name must be executable"
+    timeout 30 "$bin_root/$skill_name" --help >/dev/null || \
+        fail "$bin_root/$skill_name must run through its installed symlink"
 }
 
 assert_skill_link() {
