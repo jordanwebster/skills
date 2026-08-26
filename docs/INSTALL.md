@@ -10,8 +10,10 @@ cd /absolute/path/to/skills
 ```
 
 With no skill names, the installer symlinks every directory under `skills/`
-into both `~/.claude/skills/` and `~/.agents/skills/`. Name one or more skills
-to install only that subset:
+into both `~/.claude/skills/` and `~/.agents/skills/`, and links each
+skill's command (`autopilot`, `tasks`) into `~/.local/bin` (or
+`$SKILLS_BIN_DIR`) so the commands the skills print work in a plain shell.
+Name one or more skills to install only that subset:
 
 ```bash
 ./install.sh handoff
@@ -37,7 +39,13 @@ Tasks needs no per-repo setup: copy `templates/tasks.toml` once to
 to a local JSON file. The `linear` backend needs a Linear API key in the
 environment (`LINEAR_API_KEY` by default) and, when the key sees several
 teams, a team key in the config. The delegate roster lives at
-`~/.config/delegate/roster.toml`; see `skills/delegate/templates/roster.toml`.
+`~/.config/delegate/roster.toml`; see `skills/delegate/templates/roster.toml`,
+and run `autopilot preflight` inside a planned flight after editing it.
+
+Proof capture needs whatever the promise needs: a browser driver such as
+Playwright for screenshots and recordings of web UI, nothing extra for
+command transcripts. A flight plan lists the commands that prove those
+tools exist and refuses to take off when one fails.
 
 While there is one user, installations intentionally follow the latest global
 checkout and version skew is accepted. Revisit release tags when a colleague

@@ -21,13 +21,15 @@ spec. Design decisions are recorded in commit messages.
 
 ## Layout
 
-- `skills/handoff/` — the merge-decision page: prompts and the page renderer.
+- `skills/handoff/` — the merge-decision page: the proof plan, the
+  reviewer and front-page prompts, and the page command (the renderer is
+  autopilot's).
 - `skills/tasks/` — the `tasks` CLI under `lib/` and its pluggable backends
   under `backends/`.
 - `skills/intake/` — requirements alignment before work starts.
 - `skills/autopilot/` — the unattended flight loop: skill, prompts, plan
   template, and the `autopilot` CLI under `lib/`.
-- `skills/delegate/` — staffing policy: roles, roster, staffing log.
+- `skills/delegate/` — staffing policy: roles and the operator's roster.
 - `templates/` — the consumer instruction and configuration footprint.
 - `config/` — the operator's global agent configuration (symlinked by
   `install.sh --agent-config`).
@@ -36,16 +38,27 @@ spec. Design decisions are recorded in commit messages.
 - `docs/INSTALL.md` — collection and consumer installation instructions.
 - `tests/` — fixture-repository shell tests; `tests/autopilot/` holds the
   CLI's Python tests, run through `tests/test-autopilot.sh`.
-- `install.sh` — installs every skill into both supported harnesses.
+- `install.sh` — installs every skill into both supported harnesses and
+  links each skill's command into `~/.local/bin`.
 
-Handoff evidence lives untracked under `.handoff/`; it never enters this
-repository's history.
+Handoff evidence lives untracked under `.handoff/` and flight state under
+`.autopilot/`; neither enters this repository's history.
 
 ## Handoff
 
-Large or consequential work ends with a handoff; use the `handoff` skill
-from the start. Small self-contained fixes end with a passing test and a
-clear commit message — no handoff.
+Work whose promise a diff cannot show ends with proof of it working;
+work that cannot be judged in one sitting ends with a handoff page. Use
+the `handoff` skill from the start — the proof plan comes before the code.
+Small self-contained fixes whose diff shows everything end with a passing
+test and a clear commit message.
+
+### Capturing proof here
+
+The commands are the product: a transcript of the command and its output
+(`script -q <file> <command>`, or the test's own output) is the capture.
+Rendered pages are proof when a page is the promise: render with
+`skills/autopilot/scripts/autopilot page <file.md> --no-open` and
+screenshot the HTML in a browser.
 
 Tasks configuration is operator-global at `~/.config/tasks/config.toml`;
 the reference copy lives under `templates/`. Operator facts never enter
