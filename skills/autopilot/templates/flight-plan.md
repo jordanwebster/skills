@@ -33,9 +33,9 @@ see the promise: a screenshot or recording for anything visual, a
 transcript for a command, a before/after pair for data, a test transcript
 when the test itself exercises that boundary.
 
-| Promise | Evidence | Captured by |
+| Accepted demonstration | Evidence coverage | Replay recipe |
 | --- | --- | --- |
-| WHAT A USER CAN DO | WHAT WILL BE SHOWN | THE TOOL OR COMMAND |
+| WHAT THE OPERATOR CONFIRMED | WHAT WILL BE SHOWN AND WHERE | COMMAND, STEPS, OR ACCEPTED NOT-REPLAYABLE REASON |
 
 Per-chunk checks and the whole-flight check are in the block below. The
 `preflight` commands prove every capture and verification tool exists
@@ -57,6 +57,15 @@ WRAP-UP PAGE.
     "check_timeout": 1800,
     "preflight": ["timeout 60 npx playwright --version"]
   },
+  "evidence": [
+    {
+      "id": "SUBJECT-NAME",
+      "claim": "WHAT THE RESULT PROVES IN PRODUCT LANGUAGE",
+      "demonstrations": ["ACCEPTED DEMONSTRATION SUBJECT"],
+      "artifacts": ["evidence/EXPECTED-CAPTURE.ext"],
+      "replay": {"kind": "command", "command": "timeout 300 COMMAND"}
+    }
+  ],
   "chunks": [
     {"id": 1, "title": "CHUNK TITLE", "role": "implementer", "check": "timeout 600 COMMAND", "review": true}
   ],

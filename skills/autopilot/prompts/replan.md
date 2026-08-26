@@ -13,7 +13,7 @@ not have. Read the task's notes, the latest agent log under
 - **Rebind.** The failures look like a mind too weak or too shallow for the
   job. `autopilot task edit --role …` or `--effort …`, note why, reset.
 - **Park.** The task is not worth its cost now. Park it with a reason; it
-  surfaces as a follow-up at the wrap-up.
+  surfaces as a follow-up at completion.
 - **Escalate.** Finishing it needs a decision only the operator can make:
   scope, an irreversible change, spend. Escalate in the fixed shape and the
   flight continues on other work.

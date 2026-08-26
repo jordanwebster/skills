@@ -1,70 +1,60 @@
 ## Your job
 
-Every chunk is done. Decide whether the flight delivered its goal — the
-requirements the operator confirmed, not the tasks the plan listed. Tasks
-are how the work was organised; requirements are what was promised.
+Perform the flight's one whole-result acceptance and independent Handoff
+review. You are the final reviewer; no third landing review follows you.
 
-Read, in order: `.autopilot/requirements.md` if present, the goal, design,
-and **Proof** table in `.autopilot/flight-plan.md`, the chunk reviews
-under `.autopilot/reviews/`, the captures under `.autopilot/evidence/`,
-and the diff since the base commit. Run the tests. Try the thing the way
-its user will — and capture what you see: the proof table names the
-evidence each promise needs (a screenshot, a recording, a transcript) and
-the tool; if a capture is missing or stale, take it now, at head, into
-`.autopilot/evidence/`.
+Read the confirmed acceptance contract, approved plan and evidence coverage,
+the committed diff, chunk reviews, and actual captures. Exercise the result at
+the boundary its user sees. Attack the evidence rather than trusting captions.
+Do not modify product code or tests.
 
-Write `.autopilot/acceptance.md` for the operator. It becomes the body
-of the wrap-up page — the one page they read before deciding to merge —
-so it has the shape every front page in this collection has:
+If a confirmed outcome is not met, or accepted evidence is missing or stale,
+file a gap task. Optional polish is a parked follow-up. Otherwise write
+`.autopilot/handoff/proof.json` using Handoff's public schema:
 
-```
-Verdict: accept | gaps
-
-## WHAT CHANGED
-What a user can now do that they could not, then one line per shipped
-change and the failure it prevents. The product's vocabulary; no task
-numbers, no flight vocabulary. A small ASCII aid if it replaces prose.
-
-## PROOF
-The commit the evidence describes. One entry per promise in the plan's
-proof table: the claim; the capture that shows it, embedded —
-`![what the reader is looking at](evidence/name.png)` (images and
-recordings render inline on the page; a transcript goes in a short code
-block); the command that replays it; and the gap — what was never seen
-working, as a user would experience it, or "none" when the capture shows
-the whole promise. Exactly one line saying who checked independently and
-what they did not do.
-
-## OVER TO YOU
-Only decisions the operator must make, each as option, consequence,
-tension; the single most valuable manual check with exact commands; and
-the part of the work least worth being proud of, named concretely.
-
-## FRICTION & FOLLOW-UPS
-What fought back, compressed to cost and cause, in three buckets — the
-codebase, the tooling, the requirements — from the flight notes and the
-agents' task notes; requirements only partly met; the follow-ups parked
-during the flight, one line each.
+```json
+{
+  "schema_version": 1,
+  "mode": "page",
+  "title": "RESULT IN PRODUCT LANGUAGE",
+  "reviewed_commit": "FULL HEAD SHA",
+  "review": {
+    "reviewer": "closer",
+    "reviewed_commit": "SAME FULL HEAD SHA",
+    "summary": "WHAT WAS INDEPENDENTLY CHECKED",
+    "limitations": []
+  },
+  "changes": ["WHAT A USER CAN NOW DO"],
+  "accepted_demonstrations": [
+    {"id": "stable-subject", "description": "WHAT THE OPERATOR AGREED TO SEE"}
+  ],
+  "claims": [
+    {
+      "claim": "WHAT THE RESULT PROVES",
+      "demonstrations": ["stable-subject"],
+      "artifacts": [{"path": "evidence/name.ext", "label": "WHAT IT SHOWS"}],
+      "replay": {"kind": "command", "command": "timeout 300 COMMAND"},
+      "gap": "none"
+    }
+  ],
+  "decisions": [],
+  "follow_ups": []
+}
 ```
 
-Fifty non-blank lines of text at most; captures do not count. The reader
-is expert and busy and will not open the diff; every sentence must be
-able to change their decision.
-
-## The bar
-
-- A gap is a confirmed requirement that is not met, or a promise the plan
-  makes that the code does not keep — including a promise whose evidence
-  cannot be captured because the product does not do it. File each as a
-  task with the command given below, with a done-when the next agent can
-  act on.
-- Polish, refactoring, and "could be better" are not gaps. Park them
-  as follow-ups (`autopilot task add "…" --later`) and list them under
-  FRICTION & FOLLOW-UPS.
-- You get one round. If the gaps you file come back unmet, the operator
-  decides, not another round of you.
+A replay may instead be `{"kind":"steps","steps":[...]}` or
+`{"kind":"not_replayable","accepted_reason":"why this boundary was accepted","limitation":"what remains unobserved"}`.
+Copy each used capture into `.autopilot/handoff/evidence/`; artifact paths
+must remain inside the Handoff workspace. Coverage is
+many-to-many: one claim may reference several demonstrations and several
+claims may reference one demonstration. Preserve accepted demonstrations;
+never substitute weaker evidence. Use product language, not task or flight
+vocabulary.
 
 ## Rules of the road
 
-- Do not modify product code or tests.
+- The proof describes the current committed HEAD.
+- An unobserved promise is an explicit gap, never a lowered bar.
+- File genuine gaps with `autopilot task add "…" --done-when "…" --origin closer`.
+- File optional follow-ups with `autopilot task add "…" --later`.
 - Wrap every long-running command in `timeout`.

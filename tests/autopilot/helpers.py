@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 from autopilot import gitops
+from autopilot import approval
 from autopilot.plan import read_plan, seed_flight
 from autopilot.roster import Roster
 from autopilot.state import Flight
@@ -44,6 +45,15 @@ def toy_plan(tasks: list[dict], *, chunks: list[dict] | None = None, config: dic
     return {
         "goal": "Build the toy",
         "config": config or {"max_iterations": 30},
+        "evidence": [
+            {
+                "id": "toy-result",
+                "claim": "The toy works",
+                "demonstrations": ["The toy result is visible"],
+                "artifacts": ["evidence/toy.txt"],
+                "replay": {"kind": "command", "command": "test -f 1.txt"},
+            }
+        ],
         "chunks": chunks or [{"id": 1, "title": "Files", "role": "implementer", "check": "test -f README.md"}],
         "tasks": tasks,
     }
@@ -67,7 +77,7 @@ ROLES = ("planner", "implementer", "ui-developer", "prober", "qa-tester", "revie
 def write_roster(path: Path, roles: tuple[str, ...] = ROLES, *, cli: str = "python3") -> Path:
     path.write_text(
         "".join(
-            f"[{role}]\ncli = \"{cli}\"\nargs = [\"{FAKE_AGENT}\"]\nmodel = \"fake\"\neffort = \"low\"\n\n"
+            f"[{role}]\ncli = \"{cli}\"\nargs = [\"{FAKE_AGENT}\"]\nfamily = \"generic\"\nmodel = \"fake\"\neffort = \"low\"\n\n"
             for role in roles
         )
     )
@@ -85,11 +95,11 @@ class FlightCase(unittest.TestCase):
         self.root.mkdir()
         make_repo(self.root)
         self.roster_path = write_roster(self.base / "roster.toml")
-        self.roster = Roster(self.roster_path)
         self.env = dict(os.environ)
         self.env.update(
             {
                 "DELEGATE_ROSTER": str(self.roster_path),
+                "DELEGATE_COMMAND": str(SKILL_DIR.parent / "delegate" / "scripts" / "delegate"),
                 "AUTOPILOT_INFRA_WAIT": "0",
                 "AUTOPILOT_NO_BROWSER": "1",
                 "PYTHONPATH": str(SKILL_DIR / "lib"),
@@ -99,14 +109,27 @@ class FlightCase(unittest.TestCase):
                 "GIT_COMMITTER_EMAIL": "autopilot@example.invalid",
             }
         )
-        for name in ("FAKE_REVIEW_FINDINGS", "FAKE_CLOSER_GAPS", "FAKE_INFRA", "FAKE_SLEEP"):
+        self.roster = Roster(environment=self.env)
+        for name in ("FAKE_REVIEW_FINDINGS", "FAKE_CLOSER_GAPS", "FAKE_INFRA", "FAKE_CONFIG", "FAKE_SLEEP"):
             self.env.pop(name, None)
 
-    def seed(self, plan: dict) -> Flight:
+    def seed(self, plan: dict, *, approve: bool = True) -> Flight:
         gitops.exclude(self.root, ".autopilot/")
         flight = Flight(self.root).create(plan["goal"], "autopilot/toy", git(self.root, "rev-parse", "HEAD").strip())
+        flight.requirements_path.write_text("# Confirmed acceptance\n\nThe toy result is visible.\n")
+        flight.acceptance_receipt_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "contract_digest": approval.digest_bytes(flight.requirements_path.read_bytes()),
+                    "confirmed_at": "2026-01-01T00:00:00+00:00",
+                }
+            )
+        )
         flight.plan_path.write_text(plan_markdown(plan))
         seed_flight(flight, read_plan(flight.plan_path))
+        if approve:
+            approval.approve(flight, read_plan(flight.plan_path), self.roster)
         git(self.root, "checkout", "-q", "-b", "autopilot/toy")
         return flight
 

@@ -4,7 +4,7 @@ import json
 import time
 import unittest
 
-from autopilot import supervise
+from autopilot import approval, supervise
 from autopilot.state import Flight
 
 from helpers import FlightCase, git, plan_markdown, task, toy_plan
@@ -12,7 +12,18 @@ from helpers import FlightCase, git, plan_markdown, task, toy_plan
 
 class CliTests(FlightCase):
     def test_init_plan_start_status_end_to_end(self) -> None:
-        init = self.cli("init", "--goal", "Build the toy")
+        contract = self.base / "acceptance.md"
+        contract.write_text("# Acceptance\n\nThe toy result is visible.\n")
+        contract.with_name(contract.name + ".acceptance.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "contract_digest": approval.digest_bytes(contract.read_bytes()),
+                    "confirmed_at": "2026-01-01T00:00:00+00:00",
+                }
+            )
+        )
+        init = self.cli("init", "--goal", "Build the toy", "--requirements", str(contract))
         self.assertEqual(init.returncode, 0, init.stderr)
         self.assertEqual(git(self.root, "rev-parse", "--abbrev-ref", "HEAD").strip(), "autopilot/build-the-toy")
         self.assertEqual(git(self.root, "status", "--porcelain").strip(), "", "flight state is untracked")
@@ -27,6 +38,10 @@ class CliTests(FlightCase):
         self.assertIn("<title>Toy plan</title>", page)
         self.assertIn("<td>first</td>", page)
 
+        approved = self.cli("approve", "--json")
+        self.assertEqual(approved.returncode, 0, approved.stderr)
+        self.assertEqual(json.loads(approved.stdout)["status"], "approved")
+
         started = self.cli("start")
         self.assertEqual(started.returncode, 0, started.stderr)
         deadline = time.monotonic() + 90
@@ -38,7 +53,10 @@ class CliTests(FlightCase):
         self.assertEqual(flight.data["status"], "landed")
         status = self.cli("status")
         self.assertIn("landed", status.stdout)
-        self.assertIn("Wrap-up", status.stdout)
+        self.assertIn("Next: read the completion page.", status.stdout)
+        self.assertEqual(status.stdout.count("Next:"), 1)
+        status_json = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual(status_json["next_action"]["kind"], "read_completion")
         self.assertEqual(self.cli("start").returncode, 1, "a landed flight cannot restart")
         self.assertIn("No driver is running", self.cli("stop").stdout)
 
@@ -121,7 +139,7 @@ class CliTests(FlightCase):
         self.assertEqual(started.returncode, 0, started.stderr)
         self.assertTrue(supervise.read_status(flight.runtime_dir).alive)
         status = self.cli("status")
-        self.assertIn("driver alive", status.stdout)
+        self.assertIn("Driver: alive", status.stdout)
         stopped = self.cli("stop")
         self.assertIn("Driver stopped", stopped.stdout)
         self.assertFalse(supervise.read_status(flight.runtime_dir).alive)

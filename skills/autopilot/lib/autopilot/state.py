@@ -62,6 +62,9 @@ class Flight:
         self.plan_path = self.dir / "flight-plan.md"
         self.plan_page_path = self.dir / "flight-plan.html"
         self.requirements_path = self.dir / "requirements.md"
+        self.acceptance_receipt_path = self.dir / "acceptance-receipt.json"
+        self.approval_path = self.dir / "plan-approval.json"
+        self.handoff_dir = self.dir / "handoff"
         self.events_path = self.dir / "events.log"
         self.runtime_dir = self.dir / "runtime"
         self.data: dict[str, Any] = {}
@@ -121,6 +124,7 @@ class Flight:
             "iteration": 0,
             "closer_rounds": 0,
             "dispatches": [],
+            "failure": None,
         }
         self.dir.mkdir(parents=True, exist_ok=True)
         if not self.notes_path.exists():
@@ -254,6 +258,8 @@ class Flight:
             "attempts": 0,
             "notes": notes,
             "commit": "",
+            "attempt_head": "",
+            "attempt_advanced": False,
             "origin": origin,
         }
         self.tasks.append(task)

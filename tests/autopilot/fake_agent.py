@@ -9,7 +9,6 @@ failure modes the loop must handle:
   [escalate]    raise an escalation instead of working, once
   [stall]       exit without touching anything
 
-A preflight smoke prompt gets the word "ok" and nothing else.
 """
 
 from __future__ import annotations
@@ -78,12 +77,49 @@ def review() -> None:
 
 def close() -> None:
     gaps = os.environ.get("FAKE_CLOSER_GAPS") and flight()["closer_rounds"] == 1
-    verdict = "gaps" if gaps else "accept"
-    (ROOT / ".autopilot" / "acceptance.md").write_text(
-        f"# Acceptance\n\nVerdict: {verdict}\n\n## What was built\n\nThe toy.\n"
-    )
     if gaps:
         autopilot("task", "add", "Close the acceptance gap", "--done-when", "closed", "--origin", "closer")
+        return
+    workspace = ROOT / ".autopilot" / "handoff"
+    evidence = workspace / "evidence"
+    evidence.mkdir(parents=True, exist_ok=True)
+    source = next(iter(sorted(ROOT.glob("*.txt"))), None)
+    (evidence / "toy.txt").write_text(source.read_text() if source else "ok\n")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (workspace / "proof.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "mode": "page",
+                "title": "Toy result",
+                "reviewed_commit": head,
+                "review": {
+                    "reviewer": "Closer",
+                    "reviewed_commit": head,
+                    "summary": "Exercised the committed result and checked its capture.",
+                    "limitations": [],
+                },
+                "changes": ["The toy now produces the expected result."],
+                "accepted_demonstrations": [
+                    {"id": "toy-result", "description": "The toy result is visible."}
+                ],
+                "claims": [
+                    {
+                        "claim": "The toy produces its result.",
+                        "demonstrations": ["toy-result"],
+                        "artifacts": [{"path": "evidence/toy.txt", "label": "Captured result"}],
+                        "replay": {"kind": "command", "command": "test -f 1.txt"},
+                        "gap": "none",
+                    }
+                ],
+                "decisions": [],
+                "follow_ups": [],
+            },
+            indent=2,
+        )
+    )
 
 
 def replan(prompt: str) -> None:
@@ -106,6 +142,9 @@ def main() -> int:
     if os.environ.get("FAKE_INFRA"):
         print("API Error: 529 Overloaded")
         return 1
+    if os.environ.get("FAKE_CONFIG"):
+        print("unknown option --obsolete-effort")
+        return 2
     if ROLE == "reviewer":
         review()
     elif ROLE == "closer":

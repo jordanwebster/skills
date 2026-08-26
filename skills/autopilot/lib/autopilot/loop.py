@@ -15,9 +15,9 @@ from pathlib import Path
 import time
 from typing import Any
 
-from . import dispatch, gitops, prompt, render
+from . import dispatch, gitops, landing, prompt
 from .notify import notify
-from .roster import Roster
+from .roster import Roster, RosterError
 from .state import Flight
 from .supervise import StopSignal, Supervisor
 
@@ -65,6 +65,7 @@ class Driver:
         gitops.exclude(root, ".autopilot/")
         self._recover()
         flight.data["status"] = "running"
+        flight.data["failure"] = None
         flight.save()
         try:
             self._loop()
@@ -131,6 +132,8 @@ class Driver:
         if chunk.get("base") is None:
             chunk["base"] = gitops.head(flight.root)
         ready = flight.ready_tasks(role=role, chunk=chunk["id"])
+        task["attempt_head"] = gitops.head(flight.root)
+        flight.save()
         before = {item["id"]: (item["status"], item["attempts"]) for item in flight.tasks}
         text = prompt.worker_prompt(flight, role, chunk, ready)
         outcome = self._dispatch(
@@ -141,6 +144,13 @@ class Driver:
             extra_env={"AUTOPILOT_CHUNK": str(chunk["id"])},
         )
         flight.load()
+        selected = flight.task(task["id"])
+        selected["attempt_advanced"] = bool(
+            selected.get("attempt_head") and selected["attempt_head"] != gitops.head(flight.root)
+        )
+        if outcome.exit_class == dispatch.EXIT_CONFIG:
+            self._config(outcome)
+            return
         if outcome.exit_class == dispatch.EXIT_INFRA:
             self._infra(outcome)
             return
@@ -154,7 +164,6 @@ class Driver:
                 flight.event(f"iteration {iteration}: task {item['id']} left in progress")
             elif item["status"] == "done" and not item["commit"]:
                 self._confirm(item, iteration)
-        selected = flight.task(task["id"])
         if selected["status"] == "todo" and before.get(task["id"]) == (selected["status"], selected["attempts"]):
             selected["attempts"] += 1
             flight.note(selected, f"Iteration {iteration} made no progress on this task ({outcome.detail}).")
@@ -190,7 +199,18 @@ class Driver:
         flight.data["iteration"] += 1
         iteration = flight.data["iteration"]
         flight.save()
-        binding = self.roster.resolve(role, effort)
+        try:
+            binding = self.roster.resolve(role, effort)
+        except RosterError as error:
+            flight.data["iteration"] -= 1
+            flight.save()
+            return dispatch.Outcome(
+                dispatch.EXIT_CONFIG,
+                None,
+                flight.runtime_dir / "logs" / f"{flight.dispatch_count() + 1:03d}-{role}.log",
+                str(error),
+                error.recovery,
+            )
         env = dict(os.environ if self.environment is None else self.environment)
         env["PATH"] = f"{prompt.SCRIPTS_DIR}{os.pathsep}{env.get('PATH', '')}"
         env.update(
@@ -218,7 +238,7 @@ class Driver:
         # The agent may have rewritten the state file; reload before recording.
         flight.load()
         flight.record_dispatch(role, binding.label, time.monotonic() - started, outcome.exit_class)
-        if outcome.exit_class == dispatch.EXIT_INFRA:
+        if outcome.exit_class in (dispatch.EXIT_CONFIG, dispatch.EXIT_INFRA):
             # The agent never ran, so the iteration is refunded: provider
             # trouble must not eat the flight's ceiling.
             flight.data["iteration"] -= 1
@@ -268,6 +288,11 @@ class Driver:
             )
             flight.load()
             chunk = flight.chunk(chunk["id"])
+            if outcome.exit_class == dispatch.EXIT_CONFIG:
+                chunk["reviewed"] = False
+                flight.save()
+                self._config(outcome)
+                return
             if outcome.exit_class == dispatch.EXIT_INFRA:
                 chunk["reviewed"] = False
                 flight.save()
@@ -333,6 +358,11 @@ class Driver:
             summary="acceptance",
         )
         flight.load()
+        if outcome.exit_class == dispatch.EXIT_CONFIG:
+            flight.data["closer_rounds"] -= 1
+            flight.save()
+            self._config(outcome)
+            return
         if outcome.exit_class == dispatch.EXIT_INFRA:
             flight.data["closer_rounds"] -= 1
             flight.save()
@@ -344,8 +374,20 @@ class Driver:
             flight.event(f"acceptance: closer filed {len(gaps)} gap task(s)")
             flight.save()
             return
+        result = landing.finish(flight.handoff_dir, environment=self.environment)
+        if not result.ok:
+            flight.add_task(
+                "Complete the decision-ready proof bundle",
+                chunk=flight.chunks[-1]["id"],
+                done_when="Handoff validates the page-mode proof bundle at the current commit",
+                origin="closer",
+                notes=f"Handoff validation: {result.detail}. {result.recovery or ''}".strip(),
+            )
+            flight.event(f"acceptance: proof bundle rejected — {result.detail}")
+            flight.save()
+            return
         flight.data["status"] = "landed"
-        (flight.dir / "wrap-up.html").write_text(render.wrap_up(flight), encoding="utf-8")
+        flight.data["handoff"] = dict(result.payload or {})
         flight.event("flight landed")
         flight.save()
         notify("Autopilot", f"Flight landed: {flight.data['goal'][:80]}")
@@ -360,6 +402,9 @@ class Driver:
             summary=f"replan of task {task['id']}",
         )
         flight.load()
+        if outcome.exit_class == dispatch.EXIT_CONFIG:
+            self._config(outcome)
+            return
         if outcome.exit_class == dispatch.EXIT_INFRA:
             self._infra(outcome)
             return
@@ -386,6 +431,18 @@ class Driver:
         flight = self.flight
         for task in flight.tasks:
             if task["status"] == "doing":
+                self._commit_leftovers("WIP: recover uncommitted work")
+                if task.get("check"):
+                    passed, output = dispatch.run_check(
+                        task["check"], cwd=flight.root, timeout=flight.config["check_timeout"]
+                    )
+                    if passed:
+                        flight.set_status(task, "done")
+                        task["commit"] = gitops.head(flight.root)
+                        task["attempt_advanced"] = bool(task.get("attempt_head") and task["attempt_head"] != task["commit"])
+                        flight.note(task, "Recovered after restart: the durable check already passed, so work was not dispatched twice.")
+                        continue
+                    flight.note(task, f"Restart recovery check did not pass:\n{output[-1000:]}")
                 flight.set_status(task, "todo")
                 flight.note(task, "The driver restarted while this task was in progress; check the tree before continuing.")
         flight.save()
@@ -428,6 +485,18 @@ class Driver:
                 break
             time.sleep(min(5.0, max(0.0, deadline - time.monotonic())))
 
+    def _config(self, outcome: dispatch.Outcome) -> None:
+        """A deterministic setup failure stops immediately and consumes no budget."""
+
+        flight = self.flight
+        flight.data["failure"] = {
+            "class": "config",
+            "message": outcome.detail,
+            "recovery": outcome.recovery or "Run `delegate doctor`, fix the binding, then restart.",
+        }
+        flight.save()
+        self._end("stopped", f"configuration failure: {outcome.detail}")
+
     def _end(self, status: str, reason: str) -> None:
         raise FlightEnded(self._finish(status, reason))
 
@@ -443,5 +512,5 @@ class Driver:
 
 def _task_fingerprint(task: dict[str, Any]) -> str:
     return json.dumps(
-        [task["title"], task["done_when"], task["check"], task["role"], task["status"], task["attempts"], task["chunk"]]
+        [task["title"], task["done_when"], task["check"], task["role"], task["status"], task["attempts"], task["chunk"], task.get("attempt_advanced")]
     )

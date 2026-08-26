@@ -30,8 +30,8 @@ class LoopTests(FlightCase):
         self.assertTrue(all(c["status"] == "done" for c in flight.chunks))
         self.assertTrue((flight.dir / "reviews" / "chunk-1.md").exists())
         self.assertFalse((flight.dir / "reviews" / "chunk-2.md").exists())
-        self.assertIn("Verdict: accept", (flight.dir / "acceptance.md").read_text())
-        self.assertTrue((flight.dir / "wrap-up.html").exists())
+        self.assertTrue((flight.handoff_dir / "proof.json").exists())
+        self.assertTrue((flight.handoff_dir / "handoff.html").exists())
         self.assertEqual(git(self.root, "status", "--porcelain").strip(), "")
         self.assertEqual(git(self.root, "rev-parse", "--abbrev-ref", "HEAD").strip(), "autopilot/toy")
         log = git(self.root, "log", "--oneline")
@@ -97,6 +97,15 @@ class LoopTests(FlightCase):
         self.assertEqual(flight.task(1)["attempts"], 0)
         self.assertIn("infrastructure", flight.open_escalations()[0]["text"])
 
+    def test_config_failure_stops_without_consuming_work_budget(self) -> None:
+        flight = self.seed(toy_plan([task(1, "first")]))
+        self.assertEqual(self.drive(flight, FAKE_CONFIG="1"), "stopped")
+        flight.load()
+        self.assertEqual(flight.data["iteration"], 0)
+        self.assertEqual(flight.task(1)["attempts"], 0)
+        self.assertEqual(flight.data["failure"]["class"], "config")
+        self.assertIn("delegate doctor", flight.data["failure"]["recovery"])
+
     def test_iteration_ceiling(self) -> None:
         plan = toy_plan([task(1, "first"), task(2, "second", chunk=1)])
         flight = self.seed(plan)
@@ -124,6 +133,20 @@ class LoopTests(FlightCase):
         flight.load()
         self.assertIn("restarted", flight.task(1)["notes"])
         self.assertIn("recover uncommitted work", git(self.root, "log", "--oneline"))
+
+    def test_restart_does_not_redispatch_completed_durable_work(self) -> None:
+        plan = toy_plan([task(1, "first")], chunks=[{"id": 1, "title": "Files", "review": False}])
+        flight = self.seed(plan)
+        (self.root / "1.txt").write_text("ok\n")
+        git(self.root, "add", "1.txt")
+        git(self.root, "commit", "-m", "Complete first result")
+        flight.set_status(flight.task(1), "doing")
+        flight.task(1)["attempt_head"] = flight.data["base"]
+        flight.save()
+        self.assertEqual(self.drive(flight), "landed")
+        flight.load()
+        self.assertIn("not dispatched twice", flight.task(1)["notes"])
+        self.assertFalse(any(item["role"] == "implementer" for item in flight.data["dispatches"]))
 
 
 if __name__ == "__main__":

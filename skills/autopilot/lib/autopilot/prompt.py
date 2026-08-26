@@ -91,6 +91,7 @@ def format_task(flight: Flight, task: dict[str, Any]) -> str:
         lines.append("Depends on: " + ", ".join(str(item) for item in task["depends_on"]))
     if task["attempts"]:
         lines.append(f"Earlier attempts: {task['attempts']}")
+        lines.append(f"Latest attempt advanced the branch: {'yes' if task.get('attempt_advanced') else 'no'}")
     if task.get("notes"):
         lines.append("Notes:")
         lines.extend(f"  {line}" for line in task["notes"].splitlines())
@@ -184,7 +185,7 @@ def closer_prompt(flight: Flight, *, check_result: str | None) -> str:
         parts += ["", "Parked tasks (follow-ups, not built):", ""]
         parts += [f"- Task {task['id']} {task['title']}: {task['notes'].splitlines()[-1] if task['notes'] else ''}" for task in parked]
     parts += ["", "## Flight notes", "", flight.notes().strip() or "(none yet)", ""]
-    parts.append("Write your verdict to `.autopilot/acceptance.md`.")
+    parts.append("Write the reviewed proof bundle to `.autopilot/handoff/proof.json`.")
     parts.append(
         "File each genuine gap with `autopilot task add \"…\" --done-when \"…\" --origin closer` "
         "(it lands in the last chunk unless you pass --chunk)."
@@ -215,7 +216,13 @@ def replan_prompt(flight: Flight, task: dict[str, Any], *, reason: str) -> str:
     return "\n".join(parts)
 
 
-def planner_prompt(flight: Flight) -> str:
+def planner_prompt(
+    flight: Flight,
+    *,
+    feedback: str | None = None,
+    reason: str | None = None,
+    observations: str | None = None,
+) -> str:
     template = PROMPTS_DIR.parent / "templates" / "flight-plan.md"
     parts = [header(flight, "planner"), role_prompt("planner"), ""]
     parts += [
@@ -225,4 +232,29 @@ def planner_prompt(flight: Flight) -> str:
     ]
     if flight.requirements_path.exists():
         parts += ["## Confirmed requirements", "", flight.requirements_path.read_text(encoding="utf-8"), ""]
+    if feedback is not None:
+        parts += [
+            "## Revision input",
+            "",
+            "Revise the current plan; do not plan again from nothing. Preserve accepted decisions unless the feedback or new observations invalidate them.",
+            "",
+            "### Current plan",
+            "",
+            flight.plan_path.read_text(encoding="utf-8") if flight.plan_path.exists() else "(missing)",
+            "",
+            "### Operator feedback (verbatim)",
+            "",
+            feedback,
+            "",
+            "### Why the plan was rejected",
+            "",
+            reason or "(not supplied)",
+            "",
+            "### New repository observations",
+            "",
+            observations or "(none)",
+            "",
+            "The exploratory conversation is intentionally absent. New observations cannot silently change confirmed outcomes or demonstrations; surface a contradiction instead.",
+            "",
+        ]
     return "\n".join(parts)

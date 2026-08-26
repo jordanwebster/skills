@@ -29,7 +29,7 @@ sections:
   table says it should? A promise with no capture where the plan required
   one is a must-fix.
 - There is one fix round. What you do not file now is recorded for the
-  wrap-up, not raised again.
+  completion page, not raised again.
 
 ## Rules of the road
 

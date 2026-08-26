@@ -80,6 +80,30 @@ def plan_roles(plan: dict[str, Any]) -> list[str]:
     return roles
 
 
+def plan_bindings(plan: dict[str, Any]) -> list[tuple[str, str | None]]:
+    """Every actual role-effort combination a flight may dispatch."""
+
+    combinations: list[tuple[str, str | None]] = []
+
+    def add(role: str, effort: str | None = None) -> None:
+        value = (role, effort or None)
+        if value not in combinations:
+            combinations.append(value)
+
+    add("planner")
+    chunks = {chunk["id"]: chunk for chunk in plan["chunks"]}
+    for chunk in plan["chunks"]:
+        add(chunk.get("role") or "implementer", chunk.get("effort"))
+    for task in plan["tasks"]:
+        chunk = chunks[task["chunk"]]
+        add(task.get("role") or chunk.get("role") or "implementer", task.get("effort") or chunk.get("effort"))
+    for chunk in plan["chunks"]:
+        if chunk.get("review") is not False:
+            add("reviewer", chunk.get("review_effort"))
+    add("closer", plan.get("config", {}).get("closer_effort"))
+    return combinations
+
+
 def _validate(plan: Any) -> dict[str, Any]:
     if not isinstance(plan, dict):
         raise PlanError("plan block must be a JSON object")
@@ -98,6 +122,34 @@ def _validate(plan: Any) -> dict[str, Any]:
     preflight = config.get("preflight", [])
     if not isinstance(preflight, list) or any(not isinstance(item, str) for item in preflight):
         raise PlanError("plan config.preflight must be a list of shell commands")
+    evidence = plan.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        raise PlanError("plan needs at least one evidence item")
+    evidence_ids: set[str] = set()
+    for item in evidence:
+        _require_fields(item, "evidence item", ("id", "claim", "demonstrations", "artifacts", "replay"))
+        if not isinstance(item["id"], str) or not item["id"].strip() or item["id"] in evidence_ids:
+            raise PlanError("evidence ids must be unique non-empty strings")
+        evidence_ids.add(item["id"])
+        for field in ("demonstrations", "artifacts"):
+            if not isinstance(item[field], list) or not item[field] or any(not isinstance(value, str) or not value for value in item[field]):
+                raise PlanError(f"evidence item {item['id']!r} {field} must be a non-empty string list")
+        replay = item["replay"]
+        if not isinstance(replay, dict) or replay.get("kind") not in ("command", "steps", "not_replayable"):
+            raise PlanError(f"evidence item {item['id']!r} has an invalid replay recipe")
+        if replay["kind"] == "command" and not isinstance(replay.get("command"), str):
+            raise PlanError(f"evidence item {item['id']!r} command replay needs command")
+        if replay["kind"] == "steps" and (not isinstance(replay.get("steps"), list) or not replay["steps"]):
+            raise PlanError(f"evidence item {item['id']!r} steps replay needs steps")
+        if replay["kind"] == "not_replayable" and (
+            not isinstance(replay.get("accepted_reason"), str)
+            or not replay["accepted_reason"].strip()
+            or not isinstance(replay.get("limitation"), str)
+            or not replay["limitation"].strip()
+        ):
+            raise PlanError(
+                f"evidence item {item['id']!r} not_replayable needs accepted_reason and limitation"
+            )
 
     chunk_ids: set[int] = set()
     for chunk in chunks:

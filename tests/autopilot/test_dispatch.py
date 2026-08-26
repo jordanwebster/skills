@@ -10,7 +10,15 @@ from autopilot.roster import Binding
 
 
 def binding(cli: str, *args: str) -> Binding:
-    return Binding(role="implementer", cli=cli, args=tuple(args), model="m", effort="", effort_args=())
+    return Binding(
+        role="implementer",
+        family="generic",
+        model="m",
+        effort="",
+        constraints=[],
+        preferred={"kind": "native", "family": "generic"},
+        command=(cli, *args),
+    )
 
 
 class DispatchTests(unittest.TestCase):
@@ -45,7 +53,7 @@ class DispatchTests(unittest.TestCase):
 
     def test_missing_executable_is_infra(self) -> None:
         outcome = self.run_agent("/nonexistent/agent")
-        self.assertEqual(outcome.exit_class, dispatch.EXIT_INFRA)
+        self.assertEqual(outcome.exit_class, dispatch.EXIT_CONFIG)
 
     def test_secrets_are_redacted_from_logs(self) -> None:
         outcome = dispatch.run_agent(
@@ -70,14 +78,15 @@ class DispatchTests(unittest.TestCase):
         self.assertFalse(passed)
         self.assertIn("exceeded", output)
 
-    def test_vendor_commands(self) -> None:
-        claude = Binding("implementer", "claude", ("-p",), "opus", "high", ())
-        self.assertEqual(dispatch.build_command(claude, self.dir), ["claude", "-p", "--model", "opus", "--effort", "high"])
-        codex = Binding("reviewer", "codex", ("exec",), "gpt", "high", ("-c", "model_reasoning_effort=high"))
-        command = dispatch.build_command(codex, self.dir)
-        self.assertEqual(command[:4], ["codex", "-a", "never", "exec"])
-        self.assertEqual(command[-1], "-")
-        self.assertIn("model_reasoning_effort=high", command)
+    def test_delegate_command_is_not_reconstructed(self) -> None:
+        resolved = binding("agent", "--vendor-owned", "-")
+        self.assertEqual(dispatch.build_command(resolved, self.dir), ["agent", "--vendor-owned", "-"])
+
+    def test_auth_and_stale_flags_are_configuration_failures(self) -> None:
+        auth = self.run_agent("bash", "-c", "echo 'not authenticated'; exit 1")
+        self.assertEqual(auth.exit_class, dispatch.EXIT_CONFIG)
+        stale = self.run_agent("bash", "-c", "echo 'unknown option --effort'; exit 2")
+        self.assertEqual(stale.exit_class, dispatch.EXIT_CONFIG)
 
 
 if __name__ == "__main__":

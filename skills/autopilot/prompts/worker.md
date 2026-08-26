@@ -13,7 +13,7 @@ well. For each one:
    command's output, a data shape — capture it at the boundary a user sees
    it, into `.autopilot/evidence/`, with the tool the plan's Proof table
    names. Name the file by what it shows. That capture is what the
-   wrap-up page will show the operator.
+   completion page will show the operator.
 5. Commit when green — small commits, plain present-tense messages that
    describe the change to a reader who never heard of this flight. No task
    numbers and no flight vocabulary in commit messages, code, or docs.

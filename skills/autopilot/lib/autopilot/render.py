@@ -1,4 +1,4 @@
-"""Render the pages the operator reads: a flight plan, a wrap-up, a handoff.
+"""Render Autopilot's plan page and generic Markdown pages.
 
 Every page is one self-contained HTML file: a Markdown body, media inlined
 as data URIs so the file can be forwarded cold, and an optional appendix
@@ -15,9 +15,6 @@ import mimetypes
 from pathlib import Path
 import re
 from typing import Any
-
-from .state import Flight
-
 
 # Media larger than this is linked rather than inlined: the page must stay
 # something a browser opens instantly and a mail client accepts.
@@ -73,49 +70,6 @@ def split_title(text: str, *, default: str) -> tuple[str, str]:
         if line.startswith("# "):
             return line[2:].strip(), "\n".join(lines[:index] + lines[index + 1 :])
     return default, text
-
-
-# -- flight pages ------------------------------------------------------------------
-
-
-def wrap_up(flight: Flight) -> str:
-    acceptance = _read(flight.dir / "acceptance.md")
-    subtitle = (
-        f"Branch <code>{html.escape(flight.data['branch'])}</code> · "
-        f"status <strong>{html.escape(flight.data['status'])}</strong> · "
-        f"{flight.data['iteration']} iterations · "
-        f"base <code>{html.escape(flight.data['base'][:12])}</code>"
-    )
-    parts = ["<h2>Chunks and tasks</h2>", _task_table(flight)]
-    follow_ups = flight.parked_tasks()
-    parts.append("<h2>Follow-ups</h2>")
-    if follow_ups:
-        parts.append("<ul>")
-        for task in follow_ups:
-            note = task["notes"].splitlines()[-1] if task["notes"] else ""
-            parts.append(f"<li>{html.escape(task['title'])} <span class='muted'>{html.escape(note)}</span></li>")
-        parts.append("</ul>")
-    else:
-        parts.append("<p class='muted'>None recorded.</p>")
-    if flight.escalations:
-        parts.append("<h2>Questions raised during the flight</h2><table><tr><th>Question</th><th>Answer</th></tr>")
-        for item in flight.escalations:
-            parts.append(
-                f"<tr><td>{html.escape(item['text'])}</td>"
-                f"<td>{html.escape(item['answer'] or '(unanswered)')}</td></tr>"
-            )
-        parts.append("</table>")
-    for chunk in flight.chunks:
-        text = _read(flight.dir / "reviews" / f"chunk-{chunk['id']}.md")
-        if text:
-            parts.append(f"<h2>Review — chunk {chunk['id']}: {html.escape(chunk['title'])}</h2>")
-            parts.append(markdown(text, base=flight.dir / "reviews"))
-    parts.append("<h2>Dispatches</h2>")
-    parts.append(dispatch_table(flight))
-    parts.append("<h2>Event log (last 40)</h2><pre>")
-    parts.append(html.escape("\n".join(flight.recent_events(40))))
-    parts.append("</pre>")
-    return page(flight.data["goal"], acceptance, subtitle=subtitle, appendix="\n".join(parts), base=flight.dir)
 
 
 def flight_plan(text: str, plan: dict[str, Any], *, title: str, base: Path | None = None) -> str:
@@ -213,20 +167,6 @@ def plan_tables(plan: dict[str, Any]) -> str:
     return "\n".join(parts)
 
 
-def dispatch_table(flight: Flight) -> str:
-    rows = flight.dispatch_summary()
-    if not rows:
-        return "<p class='muted'>No agents were dispatched.</p>"
-    parts = ["<table><tr><th>Role</th><th>Binding</th><th>Dispatches</th><th>Wall time</th><th>Failed</th></tr>"]
-    for row in rows:
-        parts.append(
-            f"<tr><td>{html.escape(row['role'])}</td><td><code>{html.escape(row['label'])}</code></td>"
-            f"<td>{row['count']}</td><td>{duration(row['seconds'])}</td><td>{row['failed'] or ''}</td></tr>"
-        )
-    parts.append("</table>")
-    return "\n".join(parts)
-
-
 def duration(seconds: float) -> str:
     seconds = int(seconds)
     if seconds < 60:
@@ -234,25 +174,6 @@ def duration(seconds: float) -> str:
     if seconds < 3600:
         return f"{seconds // 60}m{seconds % 60:02d}s"
     return f"{seconds // 3600}h{(seconds % 3600) // 60:02d}m"
-
-
-def _task_table(flight: Flight) -> str:
-    rows = ["<table><tr><th>#</th><th>Task</th><th>Status</th><th>Origin</th><th>Commit</th></tr>"]
-    for chunk in flight.chunks:
-        rows.append(
-            f"<tr class='chunk-head'><td colspan='5'><strong>Chunk {chunk['id']} — {html.escape(chunk['title'])}</strong> "
-            f"<span class='muted'>({html.escape(chunk['status'])})</span></td></tr>"
-        )
-        for task in flight.chunk_tasks(chunk["id"]):
-            css = "done" if task["status"] == "done" else "open"
-            rows.append(
-                f"<tr><td>{task['id']}</td><td>{html.escape(task['title'])}</td>"
-                f"<td class='{css}'>{html.escape(task['status'])}</td>"
-                f"<td class='muted'>{html.escape(task['origin'])}</td>"
-                f"<td><code>{html.escape(task['commit'][:10])}</code></td></tr>"
-            )
-    rows.append("</table>")
-    return "\n".join(rows)
 
 
 # -- markdown ------------------------------------------------------------------------
@@ -385,10 +306,3 @@ def _media(alt: str, target: str, base: Path | None) -> str:
     if path.suffix.lower() in VIDEO_SUFFIXES:
         return f"<figure><video controls src='{source}'></video>{caption}</figure>"
     return f"<figure><img src='{source}' alt='{html.escape(alt, quote=True)}'>{caption}</figure>"
-
-
-def _read(path: Any) -> str:
-    try:
-        return path.read_text(encoding="utf-8")
-    except OSError:
-        return ""

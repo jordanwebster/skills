@@ -1,11 +1,4 @@
-"""Run one agent as a bounded child process and say how it ended.
-
-The agent works directly in the repository on the flight branch. This
-module owns the process boundary only: build the vendor command from the
-roster binding, feed the prompt on stdin, kill the whole process group on
-timeout, keep a redacted log, and classify the exit so the loop can tell a
-provider outage from a failed attempt.
-"""
+"""Run one Delegate-resolved agent process and classify how it ended."""
 
 from __future__ import annotations
 
@@ -22,12 +15,28 @@ from .roster import Binding
 
 
 EXIT_OK = "ok"
-EXIT_INFRA = "infra"
-EXIT_TIMEOUT = "timeout"
-EXIT_ERROR = "error"
+EXIT_CONFIG = "config"
+EXIT_INFRA = "infrastructure"
+EXIT_WORK = "work"
+# Compatibility names for callers while the stable classes above are adopted.
+EXIT_TIMEOUT = EXIT_WORK
+EXIT_ERROR = EXIT_WORK
 
 # Output fragments that mean the provider or CLI, not the work, failed.
 # Matching one of these keeps the iteration from consuming a retry.
+_CONFIG_MARKERS = (
+    "not authenticated",
+    "not logged in",
+    "please log in",
+    "please run /login",
+    "authentication required",
+    "unexpected argument",
+    "unknown option",
+    "unknown flag",
+    "invalid value",
+    "no such file or directory",
+    "permission denied",
+)
 _INFRA_MARKERS = (
     "quota",
     "rate limit",
@@ -36,17 +45,11 @@ _INFRA_MARKERS = (
     "at capacity",
     "too many requests",
     "usage limit",
-    "not authenticated",
-    "not logged in",
-    "please log in",
-    "please run /login",
     "network error",
     "connection refused",
     "connection reset",
     "could not resolve",
-    "unexpected argument",
-    "unknown option",
-    "no such file or directory",
+    "temporarily unavailable",
 )
 _SECRET_ENV_NAME = re.compile(
     r"(?:api[_-]?key|auth|credential|passwd|password|secret|token)", re.IGNORECASE
@@ -64,29 +67,14 @@ class Outcome:
     return_code: int | None
     log_path: Path
     detail: str
+    recovery: str | None = None
 
 
 def build_command(binding: Binding, cwd: Path) -> list[str]:
-    """Assemble the vendor invocation; the prompt always arrives on stdin."""
+    """Return Delegate's argv unchanged; Delegate owns vendor construction."""
 
-    executable = Path(binding.cli).name.casefold()
-    if executable == "claude":
-        command = [binding.cli, *binding.args, "--model", binding.model]
-        if binding.effort:
-            command += list(binding.effort_args) or ["--effort", binding.effort]
-        return command
-    if executable == "codex":
-        command = [binding.cli, "-a", "never", *binding.args, "--model", binding.model]
-        if binding.effort:
-            command += list(binding.effort_args) or [
-                "-c",
-                f"model_reasoning_effort={binding.effort}",
-            ]
-        command += ["--cd", str(cwd), "-"]
-        return command
-    # Any other executable is treated as a generic agent: it gets the prompt
-    # on stdin and the binding in its environment. Tests use this path.
-    return [binding.cli, *binding.args]
+    del cwd
+    return list(binding.command)
 
 
 def run_agent(
@@ -131,20 +119,34 @@ def run_agent(
                 timed_out = True
             finally:
                 _terminate_group(process)
-    except FileNotFoundError as error:
+    except (FileNotFoundError, PermissionError) as error:
         log_path.write_text(f"cannot launch agent: {error}\n", encoding="utf-8")
-        return Outcome(EXIT_INFRA, None, log_path, f"cannot launch {command[0]}: {error}")
+        return Outcome(
+            EXIT_CONFIG,
+            None,
+            log_path,
+            f"cannot launch {command[0]}: {error}",
+            "Run `delegate doctor`, fix the binding, then restart.",
+        )
     output = _redact(log_path.read_bytes().decode("utf-8", errors="replace"), env)
     log_path.write_text(output, encoding="utf-8")
     elapsed = time.monotonic() - started
     if timed_out:
-        return Outcome(EXIT_TIMEOUT, None, log_path, f"agent exceeded {int(timeout)}s")
+        return Outcome(EXIT_WORK, None, log_path, f"agent exceeded {int(timeout)}s")
     if return_code == 0:
         return Outcome(EXIT_OK, 0, log_path, f"finished in {elapsed:.0f}s")
-    tail = output[-2000:].casefold()
+    tail = output[-3000:].casefold()
+    if any(marker in tail for marker in _CONFIG_MARKERS):
+        return Outcome(
+            EXIT_CONFIG,
+            return_code,
+            log_path,
+            _last_line(output),
+            "Run `delegate doctor`, fix the binding, then restart.",
+        )
     if any(marker in tail for marker in _INFRA_MARKERS):
         return Outcome(EXIT_INFRA, return_code, log_path, _last_line(output))
-    return Outcome(EXIT_ERROR, return_code, log_path, _last_line(output))
+    return Outcome(EXIT_WORK, return_code, log_path, _last_line(output))
 
 
 def run_check(command: str, *, cwd: Path, timeout: float) -> tuple[bool, str]:

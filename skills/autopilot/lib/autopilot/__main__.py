@@ -14,7 +14,7 @@ import sys
 import time
 from typing import Any
 
-from . import gitops, preflight, prompt, render, supervise
+from . import approval, gitops, preflight, prompt, render, supervise
 from .dispatch import run_agent
 from .loop import Driver
 from .plan import PlanError, read_plan, seed_flight
@@ -27,7 +27,35 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.handler(args) or 0
-    except (StateError, PlanError, RosterError, gitops.GitError, supervise.SupervisionError) as error:
+    except RosterError as error:
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "status": "error",
+                        "error": {"class": "config", "message": str(error), "recovery": error.recovery},
+                    },
+                    sort_keys=True,
+                )
+            )
+        else:
+            print(f"autopilot: {error}", file=sys.stderr)
+            print(f"Next: {error.recovery}", file=sys.stderr)
+        return 1
+    except (StateError, PlanError, gitops.GitError, supervise.SupervisionError) as error:
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "status": "error",
+                        "error": {"class": "invalid_work", "message": str(error), "recovery": str(error)},
+                    },
+                    sort_keys=True,
+                )
+            )
+            return 1
         print(f"autopilot: {error}", file=sys.stderr)
         return 1
 
@@ -45,7 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("init", help="create the flight workspace and branch")
     p.add_argument("--goal", required=True, help="one sentence: what the flight delivers")
     p.add_argument("--branch", help="flight branch (default: autopilot/<goal-slug>)")
-    p.add_argument("--requirements", type=Path, help="confirmed requirements file to copy in")
+    p.add_argument("--requirements", type=Path, required=True, help="confirmed acceptance contract to copy in")
     p.add_argument("--root", type=Path, default=None, help="repository root (default: cwd)")
     p.set_defaults(handler=cmd_init)
 
@@ -53,17 +81,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dispatch", action="store_true", help="run the roster's planner to write the plan")
     p.add_argument("--prompt", action="store_true", help="print the planner prompt and exit")
     p.add_argument("--no-open", action="store_true")
+    p.add_argument("--feedback", help="operator feedback for a fresh revision planner")
+    p.add_argument("--reason", help="why the current plan was rejected")
+    p.add_argument("--observations", type=Path, help="new repository observations for revision")
     p.set_defaults(handler=cmd_plan)
 
-    p = sub.add_parser("preflight", help="check roles, CLIs, tools, and one real dispatch per binding")
-    p.add_argument("--no-smoke", action="store_true", help="skip the real dispatch per binding")
+    p = sub.add_parser("approve", help="record explicit approval of the current plan and staffing")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(handler=cmd_approve)
+
+    p = sub.add_parser("preflight", help="check approval, staffing, CLIs, and plan prerequisites locally")
     p.set_defaults(handler=cmd_preflight)
 
     p = sub.add_parser("start", help="preflight, seed tasks from the plan, and launch the driver")
     p.add_argument("--foreground", action="store_true", help="run in this terminal instead of detached")
     p.add_argument("--max-iterations", type=int, help="override the plan's iteration ceiling")
-    p.add_argument("--no-smoke", action="store_true", help="preflight without the real dispatch per binding")
-    p.add_argument("--no-preflight", action="store_true", help="skip the preflight entirely")
     p.set_defaults(handler=cmd_start)
 
     p = sub.add_parser("drive", help=argparse.SUPPRESS)
@@ -72,7 +104,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(handler=cmd_drive)
 
     p = sub.add_parser("status", help="how the flight is going")
-    p.add_argument("--open", action="store_true", help="open the plan, or the wrap-up once landed")
+    p.add_argument("--open", action="store_true", help="open the plan, or the completion page once landed")
     p.add_argument("--json", action="store_true")
     p.set_defaults(handler=cmd_status)
 
@@ -223,14 +255,21 @@ def cmd_init(args: argparse.Namespace) -> int:
     flight = Flight(root)
     if flight.exists():
         raise StateError(f"a flight already exists at {flight.dir}; land or remove it first")
+    receipt = args.requirements.with_name(args.requirements.name + ".acceptance.json")
+    if not receipt.is_file():
+        raise StateError(
+            f"confirmed acceptance receipt not found at {receipt}; if this contract is already confirmed, "
+            f"record it with `intake finalize {args.requirements}`"
+        )
+    approval.validate_acceptance_files(args.requirements, receipt)
     branch = args.branch or f"autopilot/{_slug(args.goal)}"
     gitops.exclude(root, ".autopilot/")
     if gitops.is_dirty(root):
         raise StateError("the working tree is dirty; commit or stash before starting a flight")
     gitops.ensure_branch(root, branch)
     flight.create(args.goal.strip(), branch, gitops.head(root))
-    if args.requirements:
-        shutil.copyfile(args.requirements, flight.requirements_path)
+    shutil.copyfile(args.requirements, flight.requirements_path)
+    shutil.copyfile(receipt, flight.acceptance_receipt_path)
     flight.event(f"flight created on {branch}")
     print(f"Flight created in {flight.dir} (untracked) on branch {branch}.")
     print("Next: write the plan (`autopilot plan --dispatch`, or dispatch the planner yourself), review it, then `autopilot start`.")
@@ -239,8 +278,24 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_plan(args: argparse.Namespace) -> int:
     flight = _flight()
+    if args.dispatch and flight.tasks:
+        raise StateError("the flight has already started; do not replace its approved plan")
+    if bool(args.feedback) != bool(args.reason):
+        raise StateError("plan revision needs both --feedback and --reason")
+    observations = None
+    if args.observations:
+        try:
+            observations = args.observations.read_text(encoding="utf-8")
+        except OSError as error:
+            raise StateError(f"cannot read observations: {error}") from error
+    planner_text = prompt.planner_prompt(
+        flight,
+        feedback=args.feedback,
+        reason=args.reason,
+        observations=observations,
+    )
     if args.prompt:
-        print(prompt.planner_prompt(flight))
+        print(planner_text)
         return 0
     if args.dispatch:
         roster = Roster()
@@ -252,7 +307,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         print(f"Dispatching planner via {binding.label}; log at {log_path}")
         outcome = run_agent(
             binding,
-            prompt.planner_prompt(flight),
+            planner_text,
             cwd=flight.root,
             log_path=log_path,
             timeout=flight.config["iteration_timeout"],
@@ -260,13 +315,29 @@ def cmd_plan(args: argparse.Namespace) -> int:
         )
         flight.event(f"planner via {binding.label}: {outcome.exit_class} — {outcome.detail}")
         if outcome.exit_class != "ok":
-            raise StateError(f"planner {outcome.exit_class}: {outcome.detail} (see {log_path})")
+            recovery = f" Next: {outcome.recovery}" if outcome.recovery else ""
+            raise StateError(f"planner {outcome.exit_class}: {outcome.detail} (see {log_path}).{recovery}")
     if not flight.plan_path.exists():
         raise StateError(f"no plan at {flight.plan_path}; write one from the template or run with --dispatch")
     page = _render_plan(flight)
     print(f"Plan page: {page}")
     if not args.no_open:
         _open_in_browser(page)
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    flight = _flight()
+    if flight.tasks:
+        raise StateError("the flight has already started; its seeded plan cannot be reapproved in place")
+    plan = read_plan(flight.plan_path)
+    receipt = approval.approve(flight, plan, Roster())
+    flight.event("current plan and semantic staffing approved")
+    if args.json:
+        print(json.dumps({"schema_version": 1, "status": "approved", **receipt}, sort_keys=True))
+    else:
+        print("Plan approved for the confirmed acceptance and current staffing.")
+        print("Next: start the flight.")
     return 0
 
 
@@ -280,28 +351,33 @@ def _render_plan(flight: Flight) -> Path:
     return flight.plan_page_path
 
 
-def _preflight(flight: Flight, *, smoke: bool) -> bool:
+def _preflight(flight: Flight) -> bool:
     plan = read_plan(flight.plan_path)
-    checks = preflight.run(flight, plan, Roster(), smoke=smoke)
+    roster = Roster()
+    approval.validate(flight, plan, roster)
+    checks = preflight.run(flight, plan, roster)
     print("Preflight:")
     print(preflight.report(checks))
     failed = [check for check in checks if not check.ok]
-    flight.event(f"preflight: {len(checks) - len(failed)}/{len(checks)} checks passed" + ("" if smoke else " (no smoke)"))
+    flight.event(f"preflight: {len(checks) - len(failed)}/{len(checks)} deterministic checks passed")
     if failed:
-        print(f"{len(failed)} check(s) failed; fix the roster, the machine, or the plan, then start again.")
+        print(f"{len(failed)} check(s) failed.")
+        print("Next: fix the first failed prerequisite, then start again.")
         return False
     return True
 
 
 def cmd_preflight(args: argparse.Namespace) -> int:
-    return 0 if _preflight(_flight(), smoke=not args.no_smoke) else 1
+    return 0 if _preflight(_flight()) else 1
 
 
 def cmd_start(args: argparse.Namespace) -> int:
     flight = _flight()
     if flight.data["status"] == "landed":
         raise StateError("this flight has landed; start a new flight for new work")
-    if not args.no_preflight and not _preflight(flight, smoke=not args.no_smoke):
+    if args.max_iterations and args.max_iterations > flight.config["max_iterations"]:
+        raise StateError("--max-iterations cannot exceed the operator-approved plan ceiling")
+    if not _preflight(flight):
         return 1
     if not flight.tasks:
         seed_flight(flight, read_plan(flight.plan_path))
@@ -330,48 +406,78 @@ def cmd_drive(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     flight = _flight()
     driver = supervise.read_status(flight.runtime_dir)
+    payload = _status_payload(flight, driver)
     if args.json:
-        print(json.dumps({"flight": flight.data, "driver": driver.__dict__}, indent=2, sort_keys=True))
+        print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
     if args.open:
-        target = flight.dir / "wrap-up.html" if flight.data["status"] == "landed" else _render_plan(flight)
+        handoff = flight.data.get("handoff") or {}
+        target = Path(handoff["output"]) if flight.data["status"] == "landed" and handoff.get("output") else _render_plan(flight)
         _open_in_browser(target)
-    print(f"Goal:    {flight.data['goal']}")
-    print(f"Branch:  {flight.data['branch']}")
-    live = "alive" if driver.alive else "not running"
-    print(f"Flight:  {flight.data['status']} · iteration {flight.data['iteration']}/{flight.config['max_iterations']} · driver {live} ({driver.reason})")
-    summary = flight.dispatch_summary()
-    if summary:
-        parts = []
-        for row in summary:
-            failed = f", {row['failed']} failed" if row["failed"] else ""
-            parts.append(f"{row['role']} {row['count']} via {row['label']} ({render.duration(row['seconds'])}{failed})")
-        print(f"Agents:  {flight.dispatch_count()} dispatched — " + " · ".join(parts))
-    print("Chunks:")
-    for chunk in flight.chunks:
-        tasks = flight.chunk_tasks(chunk["id"])
-        done = sum(1 for task in tasks if task["status"] == "done")
-        marker = "done" if chunk["status"] == "done" else f"{done}/{len(tasks)}"
-        print(f"  {chunk['id']}. {chunk['title']} [{marker}]")
-    active = [task for task in flight.tasks if task["status"] == "doing"]
-    for task in active:
-        print(f"Working: task {task['id']} — {task['title']}")
-    open_escalations = flight.open_escalations()
-    if open_escalations:
-        print("Waiting on you:")
-        for item in open_escalations:
-            where = f"task {item['task']}: " if item["task"] is not None else ""
-            print(f"  #{item['id']} {where}{item['text']}")
-        print("  Answer with: autopilot answer <id> \"…\"")
-    parked = flight.parked_tasks()
-    if parked:
-        print(f"Parked (follow-ups): {', '.join(str(task['id']) for task in parked)}")
-    if flight.data["status"] == "landed":
-        print(f"Wrap-up: {flight.dir / 'wrap-up.html'}  (autopilot status --open; `autopilot land` deletes the workspace once you have read it)")
-    print("Recent events:")
-    for line in flight.recent_events(8):
-        print(f"  {line}")
+    print(f"Goal: {payload['goal']}")
+    progress = payload["progress"]
+    print(f"Progress: {progress['milestones_done']}/{progress['milestones_total']} milestones · {payload['status']}")
+    print(f"Driver: {payload['driver']['health']} — {payload['driver']['summary']}")
+    if payload["current_work"]:
+        print("Current: " + "; ".join(item["title"] for item in payload["current_work"]))
+    if payload["questions"]:
+        print("Waiting on you: " + payload["questions"][0]["question"])
+    print(f"Next: {payload['next_action']['text']}")
     return 0
+
+
+def _status_payload(flight: Flight, driver: Any) -> dict[str, Any]:
+    active = [task for task in flight.tasks if task["status"] == "doing"]
+    questions = [
+        {"id": item["id"], "question": item["text"], "task_id": item["task"]}
+        for item in flight.open_escalations()
+    ]
+    failure = flight.data.get("failure")
+    if flight.data["status"] == "landed":
+        next_action = {"kind": "read_completion", "text": "read the completion page.", "command": "autopilot status --open"}
+    elif questions:
+        next_action = {
+            "kind": "answer",
+            "text": f"answer “{questions[0]['question']}”",
+            "command": f"autopilot answer {questions[0]['id']} \"…\"",
+        }
+    elif isinstance(failure, dict) and failure.get("class") == "config":
+        next_action = {"kind": "repair_config", "text": str(failure.get("recovery") or "repair configuration, then restart.")}
+    elif flight.data["status"] == "planned" and not flight.approval_path.is_file():
+        next_action = {"kind": "approve", "text": "review and approve the plan.", "command": "autopilot approve"}
+    elif flight.data["status"] == "exhausted":
+        next_action = {"kind": "review_exhaustion", "text": "review the exhausted flight and decide whether to start a revised one."}
+    elif flight.data["status"] == "stopped" or (flight.data["status"] == "running" and not driver.alive):
+        next_action = {"kind": "restart", "text": "restart the flight.", "command": "autopilot start"}
+    elif flight.data["status"] == "planned":
+        next_action = {"kind": "start", "text": "start the flight.", "command": "autopilot start"}
+    else:
+        next_action = {"kind": "none", "text": "nothing needed."}
+    return {
+        "schema_version": 1,
+        "goal": flight.data["goal"],
+        "status": flight.data["status"],
+        "progress": {
+            "milestones_done": sum(chunk["status"] == "done" for chunk in flight.chunks),
+            "milestones_total": len(flight.chunks),
+            "milestones": [
+                {"title": chunk["title"], "status": chunk["status"]}
+                for chunk in flight.chunks
+            ],
+        },
+        "current_work": [{"title": task["title"], "role": flight.task_role(task)} for task in active],
+        "driver": {"health": "alive" if driver.alive else "not running", "summary": driver.reason},
+        "questions": questions,
+        "failure": failure,
+        "completion": flight.data.get("handoff"),
+        "next_action": next_action,
+        "diagnostics": {
+            "iteration": flight.data["iteration"],
+            "iteration_limit": flight.config["max_iterations"],
+            "dispatches": flight.data.get("dispatches", []),
+            "recent_events": flight.recent_events(20),
+        },
+    }
 
 
 def cmd_stop(args: argparse.Namespace) -> int:

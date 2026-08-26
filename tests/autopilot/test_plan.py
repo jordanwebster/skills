@@ -88,6 +88,22 @@ class PlanTests(unittest.TestCase):
         with self.assertRaises(Exception):
             seed_flight(flight, parsed)
 
+    def test_not_replayable_recipe_records_the_accepted_boundary(self) -> None:
+        plan = toy_plan([task(1, "a")])
+        plan["evidence"][0]["replay"] = {
+            "kind": "not_replayable",
+            "accepted_reason": "The observation is production-only.",
+            "limitation": "It cannot be recreated locally.",
+        }
+        read_plan(self.write(plan_markdown(plan)))
+
+        plan["evidence"][0]["replay"] = {
+            "kind": "not_replayable",
+            "reason": "Legacy ambiguous reason.",
+        }
+        with self.assertRaisesRegex(PlanError, "accepted_reason and limitation"):
+            read_plan(self.write(plan_markdown(plan)))
+
 
 if __name__ == "__main__":
     unittest.main()

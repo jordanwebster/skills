@@ -18,7 +18,7 @@ and the blast radius if the default is wrong.
 - **Design.** The components, the interfaces and APIs they expose, the
   data shapes that cross them, and where each lives. This is where design
   smells get caught — be concrete enough to be wrong.
-- **Proof.** One row per promise: the evidence that will show it working
+- **Proof.** Explicit coverage for every accepted demonstration: the evidence that will show it working
   where a user would see it (a screenshot or recording for anything
   visual, a transcript for a command, a before/after pair for data, a
   test transcript when the test exercises that boundary) and the tool
@@ -26,9 +26,12 @@ and the blast radius if the default is wrong.
   it over. Put the commands that prove each capture and verification tool
   exists into `config.preflight` — takeoff is refused if one fails, which
   is far cheaper than discovering at landing that nothing could take a
-  screenshot. Prefer purpose-built tests over "run the suite". External
-  behaviour that must be captured (a vendor CLI, a live API) gets a
-  capture task early and a fixture the rest of the flight replays.
+  screenshot. Prefer purpose-built tests over "run the suite". Coverage is
+  many-to-many: one item may cover several demonstrations, and one
+  demonstration may need several items. Evidence may be captured during
+  implementation, verification, QA, or closing; a dedicated capture task is
+  optional. Every item has a replay recipe: a command, concise interactive
+  steps, or an accepted not-replayable reason.
 - **Chunks and tasks** (rendered from the machine block — you write them
   once, there).
 - **Staffing.** Which role does each chunk and why; roles resolve to models
@@ -51,8 +54,8 @@ and the blast radius if the default is wrong.
   exists, a `check` command. Prefer three to eight tasks per chunk. Use
   `depends_on` only for real ordering; the loop runs tasks in id order
   otherwise.
-- Research, captures, and fixtures come first, as prober tasks in their
-  own chunk, so implementation never guesses about the substrate.
+- Put substrate research and fixtures early when later work genuinely depends
+  on them. Do not create capture tasks merely to satisfy the framework.
 - User-facing chunks end with a qa-tester task whose done-when names the
   captures it must leave under `.autopilot/evidence/`. UI work goes to
   `ui-developer`.

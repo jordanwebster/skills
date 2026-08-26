@@ -5,7 +5,6 @@ import tempfile
 import unittest
 
 from autopilot import render
-from autopilot.state import Flight
 
 
 PNG = bytes.fromhex(
@@ -80,29 +79,6 @@ class PlanPageTests(unittest.TestCase):
         self.assertIn("npx playwright --version", html)
         self.assertNotIn("ignored", html)
         self.assertLess(html.index("Chunk 1"), html.index("Out of scope"), "tables render where the block was")
-
-
-class WrapUpTests(unittest.TestCase):
-    def test_wrap_up_inlines_evidence_and_dispatches(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            flight = Flight(temporary).create("Ship the widget", "autopilot/widget", "0" * 40)
-            flight.add_chunk("Core")
-            flight.add_task("Do it", chunk=1)
-            flight.record_dispatch("implementer", "claude/opus/high", 61, "ok")
-            flight.record_dispatch("implementer", "claude/opus/high", 30, "error")
-            flight.record_dispatch("reviewer", "codex/gpt/high", 10, "ok")
-            (flight.dir / "evidence").mkdir()
-            (flight.dir / "evidence" / "widget.png").write_bytes(PNG)
-            (flight.dir / "acceptance.md").write_text(
-                "Verdict: accept\n\n## PROOF\n\n![Widget on screen](evidence/widget.png)\n"
-            )
-            html = render.wrap_up(flight)
-            self.assertIn("<title>Ship the widget</title>", html)
-            self.assertIn("data:image/png;base64", html)
-            self.assertIn("<td>implementer</td><td><code>claude/opus/high</code></td><td>2</td><td>1m31s</td><td>1</td>", html)
-            self.assertIn("<td>reviewer</td>", html)
-            summary = flight.dispatch_summary()
-            self.assertEqual([row["count"] for row in summary], [2, 1])
 
 
 if __name__ == "__main__":
