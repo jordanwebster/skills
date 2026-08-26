@@ -5,8 +5,9 @@ Protocol (shared by every backend): argv[1] is the operation; stdin carries
 one JSON request {"protocol", "operation", "config", "args"}; stdout carries
 the JSON result — a task, a list of tasks, or {"error": "..."}.
 
-A task is {"id", "title", "body", "state": open|closed|canceled, "labels",
-"repo", "url", "created", "updated"}.
+A task is {"id", "title", "body", "state": open|closed|canceled,
+"stage": filed|shaped|ready|doing, "labels", "repo", "url", "created",
+"updated"}.
 """
 
 from __future__ import annotations
@@ -68,6 +69,8 @@ def main() -> int:
                 continue
             if wanted_state == "closed" and task["state"] == "open":
                 continue
+            if args.get("stages") and task.get("stage", "filed") not in args["stages"]:
+                continue
             if any(label not in task["labels"] for label in args.get("labels") or []):
                 continue
             needle = (args.get("search") or "").casefold()
@@ -88,6 +91,7 @@ def main() -> int:
             "title": args["title"],
             "body": args.get("body", ""),
             "state": "open",
+            "stage": args.get("stage") or "filed",
             "labels": labels,
             "repo": args["repo"],
             "url": "",
@@ -112,6 +116,8 @@ def main() -> int:
         task["labels"] = [label for label in task["labels"] if label not in (args.get("remove_labels") or [])]
         if args.get("state"):
             task["state"] = args["state"]
+        if args.get("stage"):
+            task["stage"] = args["stage"]
         task["updated"] = now()
         save(path, data)
         print(json.dumps(task))

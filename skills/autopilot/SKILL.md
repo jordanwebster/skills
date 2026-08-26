@@ -66,8 +66,8 @@ PATH; the chat agent calls it by path.
    acceptance, notes, reviews) under `~/.local/state/autopilot/<repo>/`,
    removes `.autopilot/` from the branch in one commit so the product's
    history carries no flight vocabulary, opens the wrap-up, and prints the
-   parked follow-ups as `tasks add … --later` lines to file on the
-   operator's word. Merge is the operator's act; after it, close the task
+   parked follow-ups as `tasks add …` lines to file on the operator's
+   word (they land at stage filed, inert until gardened). Merge is the operator's act; after it, close the task
    the flight delivered through `tasks`.
 
 Any agent, any time: **`autopilot status`** answers "how is it going?"

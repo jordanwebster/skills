@@ -6,6 +6,11 @@ Needs an API key — from the environment variable the config names
 shell command that prints it — and a team key (`team`, else the sole team
 the key can see). Labels are created on first use. Speaks the
 same stdin/stdout JSON protocol as every tasks backend.
+
+Stages map onto the team's workflow: filed and shaped are the backlog
+state (shaped additionally carries the `shaped` label, since a default
+team has one backlog state), ready is the first unstarted state, doing the
+first started state.
 """
 
 from __future__ import annotations
@@ -121,7 +126,15 @@ class Linear:
         return self._states
 
     def state_for(self, kind: str) -> str:
-        wanted = {"open": "unstarted", "closed": "completed", "canceled": "canceled"}[kind]
+        wanted = {
+            "filed": "backlog",
+            "shaped": "backlog",
+            "ready": "unstarted",
+            "doing": "started",
+            "open": "unstarted",
+            "closed": "completed",
+            "canceled": "canceled",
+        }[kind]
         candidates = sorted((s for s in self.states() if s["type"] == wanted), key=lambda s: s["position"])
         if not candidates:
             raise LinearError(f"team has no {wanted} workflow state")
@@ -145,11 +158,20 @@ def shape(issue: dict) -> dict:
     repo = next((label.removeprefix("repo:") for label in labels if label.startswith("repo:")), "")
     state_type = issue["state"]["type"]
     state = "closed" if state_type == "completed" else "canceled" if state_type == "canceled" else "open"
+    if state_type == "started":
+        stage = "doing"
+    elif state_type == "unstarted":
+        stage = "ready"
+    elif "shaped" in labels:
+        stage = "shaped"
+    else:
+        stage = "filed"
     return {
         "id": issue["identifier"],
         "title": issue["title"],
         "body": issue.get("description") or "",
         "state": state,
+        "stage": stage,
         "labels": labels,
         "repo": repo,
         "url": issue["url"],
@@ -167,8 +189,12 @@ def main() -> int:
     if operation == "list":
         filters: dict = {"team": {"key": {"eq": linear.team()["key"]}}}
         state = args.get("state", "open")
-        if state == "open":
-            filters["state"] = {"type": {"in": ["backlog", "unstarted", "started"]}}
+        stages = list(args.get("stages") or [])
+        if stages:
+            types = sorted({{"filed": "backlog", "shaped": "backlog", "ready": "unstarted", "doing": "started"}[s] for s in stages})
+            filters["state"] = {"type": {"in": types}}
+        elif state == "open":
+            filters["state"] = {"type": {"in": ["backlog", "unstarted", "started", "triage"]}}
         elif state == "closed":
             filters["state"] = {"type": {"in": ["completed", "canceled"]}}
         wanted_labels = list(args.get("labels") or [])
@@ -182,7 +208,11 @@ def main() -> int:
             "query($filter: IssueFilter) { issues(filter: $filter, first: 100, orderBy: updatedAt) { nodes { " + FIELDS + " } } }",
             {"filter": filters},
         )["issues"]["nodes"]
-        print(json.dumps([shape(node) for node in nodes]))
+        shaped = [shape(node) for node in nodes]
+        if stages:
+            # filed and shaped share a workflow state; tell them apart here.
+            shaped = [task for task in shaped if task["stage"] in stages]
+        print(json.dumps(shaped))
         return 0
 
     if operation == "get":
@@ -199,6 +229,7 @@ def main() -> int:
                     "title": args["title"],
                     "description": args.get("body") or None,
                     "labelIds": linear.label_ids(labels),
+                    "stateId": linear.state_for(args.get("stage") or "filed"),
                 }
             },
         )["issueCreate"]["issue"]
@@ -217,12 +248,21 @@ def main() -> int:
                 update["title"] = args["title"]
             if args.get("body") is not None:
                 update["description"] = args["body"]
-            if args.get("state"):
+            stage = args.get("stage")
+            if stage:
+                update["stateId"] = linear.state_for(stage)
+            elif args.get("state"):
                 update["stateId"] = linear.state_for(args["state"])
-            if args.get("add_labels") or args.get("remove_labels"):
+            add_labels = list(args.get("add_labels") or [])
+            remove_labels = list(args.get("remove_labels") or [])
+            if stage == "shaped":
+                add_labels.append("shaped")
+            elif stage:
+                remove_labels.append("shaped")
+            if add_labels or remove_labels:
                 current = [node["name"] for node in issue["labels"]["nodes"]]
-                names = [name for name in current if name not in (args.get("remove_labels") or [])]
-                names += [name for name in (args.get("add_labels") or []) if name not in names]
+                names = [name for name in current if name not in remove_labels]
+                names += [name for name in add_labels if name not in names]
                 update["labelIds"] = linear.label_ids(names)
         updated = linear.query(
             "mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { issue { " + FIELDS + " } } }",

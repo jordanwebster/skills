@@ -585,7 +585,7 @@ def cmd_land(args: argparse.Namespace) -> int:
     if follow_ups:
         print("Follow-ups to file (on the operator's word), e.g. with the tasks skill:")
         for task in follow_ups:
-            print(f"  tasks add \"{task['title']}\" --later")
+            print(f"  tasks add \"{task['title']}\"")
     if not args.no_open:
         _open_in_browser(record / "wrap-up.html")
     return 0

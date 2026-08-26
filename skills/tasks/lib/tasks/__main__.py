@@ -21,6 +21,12 @@ from typing import Any
 BACKENDS_DIR = Path(__file__).resolve().parent.parent.parent / "backends"
 PROTOCOL_VERSION = 1
 
+# A task's stage is its place in the lifecycle, orthogonal to open/closed:
+# filed (an idea; inert), shaped (statement and requirements settled, not
+# scheduled), ready (an agent may pick it up), doing (an agent has it).
+STAGES = ("filed", "shaped", "ready", "doing")
+WORKABLE = ("ready", "doing")
+
 
 class TasksError(RuntimeError):
     pass
@@ -153,8 +159,9 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("list", parents=[common], help="open tasks for this repository")
+    p = sub.add_parser("list", parents=[common], help="workable tasks for this repository (ready and doing)")
     p.add_argument("--all-repos", action="store_true")
+    p.add_argument("--stage", choices=(*STAGES, "all"), help="one stage, or all open stages")
     p.add_argument("--state", choices=("open", "closed", "all"), default="open")
     p.add_argument("--label", action="append", default=[])
     p.add_argument("--search", help="text to match in titles and bodies")
@@ -164,12 +171,31 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id")
     p.set_defaults(handler=cmd_show)
 
-    p = sub.add_parser("add", parents=[common], help="file a task (an open task with the same title is returned instead)")
+    p = sub.add_parser("add", parents=[common], help="file a task at stage filed (a same-titled open task is returned instead)")
     p.add_argument("title")
     p.add_argument("--body", default="")
     p.add_argument("--label", action="append", default=[])
-    p.add_argument("--later", action="store_true", help="a follow-up nobody is scheduling yet")
     p.set_defaults(handler=cmd_add)
+
+    p = sub.add_parser("shape", parents=[common], help="settle a task's statement and requirements; stage becomes shaped")
+    p.add_argument("id")
+    p.add_argument("--title")
+    p.add_argument("--body", help="the settled statement and requirements (replaces the body)")
+    p.add_argument("--append", help="text to append to the body instead of replacing it")
+    p.set_defaults(handler=cmd_shape)
+
+    p = sub.add_parser("ready", parents=[common], help="on the operator's word: an agent may pick this up now")
+    p.add_argument("id")
+    p.set_defaults(handler=cmd_ready)
+
+    p = sub.add_parser("start", parents=[common], help="an agent has taken the task")
+    p.add_argument("id")
+    p.set_defaults(handler=cmd_start)
+
+    p = sub.add_parser("stage", parents=[common], help="set a task's stage directly")
+    p.add_argument("id")
+    p.add_argument("stage", choices=STAGES)
+    p.set_defaults(handler=cmd_stage)
 
     p = sub.add_parser("edit", parents=[common], help="change a task's title, body, or labels")
     p.add_argument("id")
@@ -203,12 +229,15 @@ def _emit(args: argparse.Namespace, value: Any, text: str) -> None:
 
 def _line(task: dict[str, Any]) -> str:
     labels = " ".join(f"[{label}]" for label in task.get("labels", []) if not label.startswith("repo:"))
-    state = "" if task.get("state") == "open" else f" ({task.get('state')})"
-    return f"{task['id']:<10} {task['title']}{state} {labels}".rstrip()
+    state = task.get("stage", "filed") if task.get("state") == "open" else task.get("state")
+    return f"{task['id']:<10} {state:<7} {task['title']} {labels}".rstrip()
 
 
 def _detail(task: dict[str, Any]) -> str:
-    lines = [f"{task['id']}  {task['title']}", f"state: {task.get('state')}  repo: {task.get('repo', '')}"]
+    lines = [
+        f"{task['id']}  {task['title']}",
+        f"state: {task.get('state')}  stage: {task.get('stage', 'filed')}  repo: {task.get('repo', '')}",
+    ]
     if task.get("labels"):
         lines.append("labels: " + ", ".join(task["labels"]))
     if task.get("url"):
@@ -221,7 +250,13 @@ def _detail(task: dict[str, Any]) -> str:
 def cmd_list(args: argparse.Namespace) -> int:
     config = load_config()
     repo = None if args.all_repos else current_repo(config, args.repo)
-    tasks = call(config, "list", repo=repo, state=args.state, labels=args.label, search=args.search)
+    if args.stage == "all" or args.state != "open":
+        stages: list[str] = []
+    elif args.stage:
+        stages = [args.stage]
+    else:
+        stages = list(WORKABLE)
+    tasks = call(config, "list", repo=repo, state=args.state, stages=stages, labels=args.label, search=args.search)
     text = "\n".join(_line(task) for task in tasks) or "No tasks."
     _emit(args, tasks, text)
     return 0
@@ -237,13 +272,13 @@ def cmd_show(args: argparse.Namespace) -> int:
 def cmd_add(args: argparse.Namespace) -> int:
     config = load_config()
     repo = current_repo(config, args.repo)
-    labels = list(dict.fromkeys(args.label + (["later"] if args.later else [])))
-    existing = call(config, "list", repo=repo, state="open", labels=[], search=args.title)
+    labels = list(dict.fromkeys(args.label))
+    existing = call(config, "list", repo=repo, state="open", stages=[], labels=[], search=args.title)
     duplicate = next((task for task in existing if task["title"].strip().casefold() == args.title.strip().casefold()), None)
     if duplicate:
         _emit(args, duplicate, f"Already filed: {_line(duplicate)}")
         return 0
-    task = call(config, "create", repo=repo, title=args.title, body=args.body, labels=labels)
+    task = call(config, "create", repo=repo, title=args.title, body=args.body, labels=labels, stage="filed")
     _emit(args, task, f"Filed: {_line(task)}")
     return 0
 
@@ -272,8 +307,40 @@ def cmd_close(args: argparse.Namespace) -> int:
 
 def cmd_reopen(args: argparse.Namespace) -> int:
     config = load_config()
-    task = call(config, "update", id=args.id, state="open")
+    task = call(config, "update", id=args.id, state="open", stage="filed")
     _emit(args, task, f"Reopened: {_line(task)}")
+    return 0
+
+
+def cmd_shape(args: argparse.Namespace) -> int:
+    config = load_config()
+    body = args.body
+    if args.append:
+        current = call(config, "get", id=args.id)
+        body = (current.get("body", "").rstrip() + "\n\n" + args.append).strip()
+    task = call(config, "update", id=args.id, title=args.title, body=body, stage="shaped")
+    _emit(args, task, f"Shaped: {_line(task)}")
+    return 0
+
+
+def cmd_ready(args: argparse.Namespace) -> int:
+    config = load_config()
+    task = call(config, "update", id=args.id, stage="ready")
+    _emit(args, task, f"Ready: {_line(task)}")
+    return 0
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    config = load_config()
+    task = call(config, "update", id=args.id, stage="doing")
+    _emit(args, task, f"Started: {_line(task)}")
+    return 0
+
+
+def cmd_stage(args: argparse.Namespace) -> int:
+    config = load_config()
+    task = call(config, "update", id=args.id, stage=args.stage)
+    _emit(args, task, f"Stage {args.stage}: {_line(task)}")
     return 0
 
 
