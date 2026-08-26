@@ -1,14 +1,14 @@
 """Read the flight plan's machine block and seed the task list from it.
 
-The plan is one HTML page. Its prose is for the operator; the single
-`<script type="application/json" id="flight-plan">` block is the part the
-loop reads. The page renders its own tables from that block, so what the
-operator approved and what the loop seeds cannot drift apart.
+The plan is one Markdown file the planner writes and the operator reads as
+a rendered page. Its prose is for the operator; the single fenced block
+opened with ```flight-plan holds the JSON the loop reads. The page renders
+that block as tables, so what the operator approved and what the loop
+seeds cannot drift apart.
 """
 
 from __future__ import annotations
 
-from html.parser import HTMLParser
 import json
 from pathlib import Path
 from typing import Any
@@ -16,34 +16,13 @@ from typing import Any
 from .state import Flight, StateError
 
 
-PLAN_BLOCK_ID = "flight-plan"
+PLAN_FENCE = "```flight-plan"
+
+KNOWN_ROLES = ("planner", "implementer", "ui-developer", "prober", "qa-tester", "reviewer", "closer")
 
 
 class PlanError(ValueError):
-    """Raised when the plan page has no usable machine block."""
-
-
-class _BlockParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.blocks: list[str] = []
-        self._capturing = False
-        self._buffer: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attributes = dict(attrs)
-        if tag.lower() == "script" and attributes.get("id") == PLAN_BLOCK_ID:
-            self._capturing = True
-            self._buffer = []
-
-    def handle_data(self, data: str) -> None:
-        if self._capturing:
-            self._buffer.append(data)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() == "script" and self._capturing:
-            self._capturing = False
-            self.blocks.append("".join(self._buffer))
+    """Raised when the plan has no usable machine block."""
 
 
 def read_plan(path: str | Path) -> dict[str, Any]:
@@ -51,22 +30,54 @@ def read_plan(path: str | Path) -> dict[str, Any]:
 
     source = Path(path)
     try:
-        html = source.read_text(encoding="utf-8")
+        text = source.read_text(encoding="utf-8")
     except OSError as error:
         raise PlanError(f"cannot read plan {source}: {error}") from error
-    parser = _BlockParser()
-    parser.feed(html)
-    parser.close()
-    if len(parser.blocks) != 1:
+    blocks = plan_blocks(text)
+    if len(blocks) != 1:
         raise PlanError(
-            f"plan must contain exactly one <script id=\"{PLAN_BLOCK_ID}\"> block, "
-            f"found {len(parser.blocks)}"
+            f"plan must contain exactly one {PLAN_FENCE} block, found {len(blocks)}"
         )
     try:
-        plan = json.loads(parser.blocks[0])
+        plan = json.loads(blocks[0])
     except json.JSONDecodeError as error:
         raise PlanError(f"plan block is not valid JSON: {error}") from error
     return _validate(plan)
+
+
+def plan_blocks(text: str) -> list[str]:
+    blocks: list[str] = []
+    buffer: list[str] | None = None
+    for line in text.splitlines():
+        if buffer is None:
+            if line.strip() == PLAN_FENCE:
+                buffer = []
+        elif line.strip() == "```":
+            blocks.append("\n".join(buffer))
+            buffer = None
+        else:
+            buffer.append(line)
+    return blocks
+
+
+def plan_roles(plan: dict[str, Any]) -> list[str]:
+    """Every role the plan will dispatch, in first-use order."""
+
+    roles: list[str] = []
+
+    def add(role: str | None) -> None:
+        if role and role not in roles:
+            roles.append(role)
+
+    add("planner")
+    for chunk in plan["chunks"]:
+        add(chunk.get("role") or "implementer")
+    for task in plan["tasks"]:
+        add(task.get("role"))
+    if any(chunk.get("review") is not False for chunk in plan["chunks"]):
+        add("reviewer")
+    add("closer")
+    return roles
 
 
 def _validate(plan: Any) -> dict[str, Any]:
@@ -84,6 +95,9 @@ def _validate(plan: Any) -> dict[str, Any]:
     config = plan.get("config", {})
     if not isinstance(config, dict):
         raise PlanError("plan config must be an object")
+    preflight = config.get("preflight", [])
+    if not isinstance(preflight, list) or any(not isinstance(item, str) for item in preflight):
+        raise PlanError("plan config.preflight must be a list of shell commands")
 
     chunk_ids: set[int] = set()
     for chunk in chunks:

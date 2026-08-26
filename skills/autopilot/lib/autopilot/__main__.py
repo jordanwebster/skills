@@ -258,10 +258,21 @@ def cmd_plan(args: argparse.Namespace) -> int:
             raise StateError(f"planner {outcome.exit_class}: {outcome.detail} (see {log_path})")
     if not flight.plan_path.exists():
         raise StateError(f"no plan at {flight.plan_path}; write one from the template or run with --dispatch")
-    read_plan(flight.plan_path)
+    page = _render_plan(flight)
+    print(f"Plan page: {page}")
     if not args.no_open:
-        _open_in_browser(flight.plan_path)
+        _open_in_browser(page)
     return 0
+
+
+def _render_plan(flight: Flight) -> Path:
+    """Render the Markdown plan to its HTML page; the page is always regenerated."""
+
+    plan = read_plan(flight.plan_path)
+    text = flight.plan_path.read_text(encoding="utf-8")
+    title, body = render.split_title(text, default=f"Flight plan: {flight.data['goal']}")
+    flight.plan_page_path.write_text(render.flight_plan(body, plan, title=title, base=flight.dir), encoding="utf-8")
+    return flight.plan_page_path
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -316,7 +327,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(json.dumps({"flight": flight.data, "driver": driver.__dict__}, indent=2, sort_keys=True))
         return 0
     if args.open:
-        target = flight.dir / "wrap-up.html" if flight.data["status"] == "landed" else flight.plan_path
+        target = flight.dir / "wrap-up.html" if flight.data["status"] == "landed" else _render_plan(flight)
         _open_in_browser(target)
     print(f"Goal:    {flight.data['goal']}")
     print(f"Branch:  {flight.data['branch']}")
@@ -584,17 +595,11 @@ def cmd_page(args: argparse.Namespace) -> int:
         body = source.read_text(encoding="utf-8")
     except OSError as error:
         raise StateError(f"cannot read {source}: {error}") from error
-    title = args.title
-    lines = body.splitlines()
-    if not title:
-        heading = next((line for line in lines if line.startswith("# ")), None)
-        if heading:
-            title = heading[2:].strip()
-            body = "\n".join(line for line in lines if line is not heading)
-        else:
-            title = source.stem.replace("-", " ")
+    title, body = render.split_title(body, default=args.title or source.stem.replace("-", " "))
+    if args.title:
+        title = args.title
     out = args.out or source.with_suffix(".html")
-    out.write_text(render.page(title, body), encoding="utf-8")
+    out.write_text(render.page(title, body, base=source.resolve().parent), encoding="utf-8")
     print(f"Wrote {out}")
     if not args.no_open:
         _open_in_browser(out)

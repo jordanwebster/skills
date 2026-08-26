@@ -65,6 +65,16 @@ def page(
     )
 
 
+def split_title(text: str, *, default: str) -> tuple[str, str]:
+    """Take the first `# ` heading as the page title; the rest is the body."""
+
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        if line.startswith("# "):
+            return line[2:].strip(), "\n".join(lines[:index] + lines[index + 1 :])
+    return default, text
+
+
 # -- flight pages ------------------------------------------------------------------
 
 

@@ -7,7 +7,7 @@ import unittest
 from autopilot import supervise
 from autopilot.state import Flight
 
-from helpers import FlightCase, git, plan_html, task, toy_plan
+from helpers import FlightCase, git, plan_markdown, task, toy_plan
 
 
 class CliTests(FlightCase):
@@ -20,8 +20,12 @@ class CliTests(FlightCase):
         missing = self.cli("plan", "--no-open")
         self.assertEqual(missing.returncode, 1)
         self.assertIn("no plan", missing.stderr)
-        Flight(self.root).plan_path.write_text(plan_html(toy_plan([task(1, "first"), task(2, "second")])))
-        self.assertEqual(self.cli("plan", "--no-open").returncode, 0)
+        Flight(self.root).plan_path.write_text(plan_markdown(toy_plan([task(1, "first"), task(2, "second")])))
+        planned = self.cli("plan", "--no-open")
+        self.assertEqual(planned.returncode, 0, planned.stderr)
+        page = (self.root / ".autopilot" / "flight-plan.html").read_text()
+        self.assertIn("<title>Toy plan</title>", page)
+        self.assertIn("<td>first</td>", page)
 
         started = self.cli("start")
         self.assertEqual(started.returncode, 0, started.stderr)

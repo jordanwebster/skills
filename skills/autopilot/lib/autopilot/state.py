@@ -59,7 +59,8 @@ class Flight:
         self.dir = self.root / WORKSPACE
         self.path = self.dir / "flight.json"
         self.notes_path = self.dir / "NOTES.md"
-        self.plan_path = self.dir / "flight-plan.html"
+        self.plan_path = self.dir / "flight-plan.md"
+        self.plan_page_path = self.dir / "flight-plan.html"
         self.requirements_path = self.dir / "requirements.md"
         self.events_path = self.dir / "events.log"
         self.runtime_dir = self.dir / "runtime"

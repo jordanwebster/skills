@@ -36,13 +36,8 @@ def make_repo(root: Path) -> None:
     git(root, "commit", "-q", "-m", "Initial commit")
 
 
-def plan_html(plan: dict) -> str:
-    return (
-        "<h1>Toy plan</h1>\n"
-        '<script type="application/json" id="flight-plan">\n'
-        + json.dumps(plan, indent=2)
-        + "\n</script>\n"
-    )
+def plan_markdown(plan: dict) -> str:
+    return "# Toy plan\n\n## Goal\n\nBuild the toy.\n\n```flight-plan\n" + json.dumps(plan, indent=2) + "\n```\n"
 
 
 def toy_plan(tasks: list[dict], *, chunks: list[dict] | None = None, config: dict | None = None) -> dict:
@@ -108,7 +103,7 @@ class FlightCase(unittest.TestCase):
     def seed(self, plan: dict) -> Flight:
         gitops.exclude(self.root, ".autopilot/")
         flight = Flight(self.root).create(plan["goal"], "autopilot/toy", git(self.root, "rev-parse", "HEAD").strip())
-        flight.plan_path.write_text(plan_html(plan))
+        flight.plan_path.write_text(plan_markdown(plan))
         seed_flight(flight, read_plan(flight.plan_path))
         git(self.root, "checkout", "-q", "-b", "autopilot/toy")
         return flight

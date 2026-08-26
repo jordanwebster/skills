@@ -49,7 +49,7 @@ def header(flight: Flight, role: str) -> str:
         f"Goal: {flight.data['goal']}",
         "",
         "Read before acting:",
-        "- .autopilot/flight-plan.html — the approved design and plan",
+        "- .autopilot/flight-plan.md — the approved design and plan",
         "- .autopilot/NOTES.md — what earlier iterations learned (included below)",
     ]
     if flight.requirements_path.exists():
@@ -216,7 +216,7 @@ def replan_prompt(flight: Flight, task: dict[str, Any], *, reason: str) -> str:
 
 
 def planner_prompt(flight: Flight) -> str:
-    template = PROMPTS_DIR.parent / "templates" / "flight-plan.html"
+    template = PROMPTS_DIR.parent / "templates" / "flight-plan.md"
     parts = [header(flight, "planner"), role_prompt("planner"), ""]
     parts += [
         f"Plan template: {template}",

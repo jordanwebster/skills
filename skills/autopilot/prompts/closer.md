@@ -5,7 +5,7 @@ requirements the operator confirmed, not the tasks the plan listed. Tasks
 are how the work was organised; requirements are what was promised.
 
 Read, in order: `.autopilot/requirements.md` if present, the goal and
-design in `.autopilot/flight-plan.html`, the chunk reviews under
+design in `.autopilot/flight-plan.md`, the chunk reviews under
 `.autopilot/reviews/`, and the diff since the base commit. Run the tests.
 Try the thing the way its user will.
 
