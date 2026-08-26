@@ -3,7 +3,7 @@ notes/
 
 # Untracked-by-convention evidence and machinery workspaces.
 .handoff/
-.scaffolding/
+.autopilot/runtime/
 
 # Local-only skill configuration; operator facts never enter shared history.
 .handoff.toml

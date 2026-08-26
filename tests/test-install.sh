@@ -18,7 +18,7 @@ for skill_path in "$repo_root"/skills/*; do
 done
 [ "$skill_count" -ge 3 ] || fail "installer test requires all three repository skills"
 [ -d "$repo_root/skills/handoff" ] || fail "installer test requires the handoff skill"
-[ -d "$repo_root/skills/scaffold" ] || fail "installer test requires the scaffold skill"
+[ -d "$repo_root/skills/autopilot" ] || fail "installer test requires the autopilot skill"
 [ -d "$repo_root/skills/tasks" ] || fail "installer test requires the tasks skill"
 
 run_installer() {
@@ -99,30 +99,30 @@ printf '%s\n' "$selective_output" | grep -q 'Links created: 2' || \
 printf '%s\n' "$selective_output" | grep -q 'MCP (Claude): not applicable (tasks not selected)' || \
     fail "installing handoff alone must not configure Linear MCP"
 
-scaffold_claude=$scratch/scaffold/claude-skills
-scaffold_agents=$scratch/scaffold/agents-skills
-scaffold_install_output=$(run_installer "$scaffold_claude" "$scaffold_agents" scaffold)
-assert_skill_link "$scaffold_claude" scaffold
-assert_skill_link "$scaffold_agents" scaffold
-printf '%s\n' "$scaffold_install_output" | grep -q 'Skills: scaffold' || \
-    fail "selective install summary must name scaffold"
-printf '%s\n' "$scaffold_install_output" | grep -q 'Links created: 2' || \
-    fail "selective scaffold install must create one link per harness"
-printf '%s\n' "$scaffold_install_output" | \
+autopilot_claude=$scratch/autopilot/claude-skills
+autopilot_agents=$scratch/autopilot/agents-skills
+autopilot_install_output=$(run_installer "$autopilot_claude" "$autopilot_agents" autopilot)
+assert_skill_link "$autopilot_claude" autopilot
+assert_skill_link "$autopilot_agents" autopilot
+printf '%s\n' "$autopilot_install_output" | grep -q 'Skills: autopilot' || \
+    fail "selective install summary must name autopilot"
+printf '%s\n' "$autopilot_install_output" | grep -q 'Links created: 2' || \
+    fail "selective autopilot install must create one link per harness"
+printf '%s\n' "$autopilot_install_output" | \
     grep -q 'MCP (Claude): not applicable (tasks not selected)' || \
-    fail "installing scaffold alone must not configure Linear MCP"
+    fail "installing autopilot alone must not configure Linear MCP"
 
-scaffold_uninstall_output=$(
-    run_installer "$scaffold_claude" "$scaffold_agents" --uninstall scaffold
+autopilot_uninstall_output=$(
+    run_installer "$autopilot_claude" "$autopilot_agents" --uninstall autopilot
 )
-printf '%s\n' "$scaffold_uninstall_output" | grep -q 'Skills: scaffold' || \
-    fail "selective uninstall summary must name scaffold"
-printf '%s\n' "$scaffold_uninstall_output" | grep -q 'Links removed: 2' || \
-    fail "selective scaffold uninstall must remove one link per harness"
-[ ! -e "$scaffold_claude/scaffold" ] && [ ! -L "$scaffold_claude/scaffold" ] || \
-    fail "selective scaffold uninstall must remove the Claude link"
-[ ! -e "$scaffold_agents/scaffold" ] && [ ! -L "$scaffold_agents/scaffold" ] || \
-    fail "selective scaffold uninstall must remove the Codex link"
+printf '%s\n' "$autopilot_uninstall_output" | grep -q 'Skills: autopilot' || \
+    fail "selective uninstall summary must name autopilot"
+printf '%s\n' "$autopilot_uninstall_output" | grep -q 'Links removed: 2' || \
+    fail "selective autopilot uninstall must remove one link per harness"
+[ ! -e "$autopilot_claude/autopilot" ] && [ ! -L "$autopilot_claude/autopilot" ] || \
+    fail "selective autopilot uninstall must remove the Claude link"
+[ ! -e "$autopilot_agents/autopilot" ] && [ ! -L "$autopilot_agents/autopilot" ] || \
+    fail "selective autopilot uninstall must remove the Codex link"
 
 conflict_claude=$scratch/conflict/claude-skills
 conflict_agents=$scratch/conflict/agents-skills

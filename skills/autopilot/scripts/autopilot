@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Launcher for the autopilot CLI. Resolves the skill directory through any
+# symlink so the same file works installed or from a checkout.
+set -euo pipefail
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+export PYTHONPATH="$here/../lib${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m autopilot "$@"
