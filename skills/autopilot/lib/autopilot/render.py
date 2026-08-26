@@ -20,29 +20,33 @@ code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-si
 """
 
 
+def page(title: str, body_markdown: str, *, subtitle: str = "", appendix: str = "") -> str:
+    """One styled HTML page: a Markdown body (the front page) and an optional appendix."""
+
+    return "\n".join(
+        [
+            "<!doctype html>",
+            "<html><head><meta charset='utf-8'>",
+            f"<title>{html.escape(title)}</title>",
+            f"<style>{_STYLE}</style></head><body>",
+            f"<h1>{html.escape(title)}</h1>",
+            f"<p class='muted'>{subtitle}</p>" if subtitle else "",
+            markdown(body_markdown) if body_markdown.strip() else "<p class='muted'>No front page was written.</p>",
+            appendix,
+            "</body></html>",
+        ]
+    )
+
+
 def wrap_up(flight: Flight) -> str:
     acceptance = _read(flight.dir / "acceptance.md")
-    reviews = []
-    for chunk in flight.chunks:
-        text = _read(flight.dir / "reviews" / f"chunk-{chunk['id']}.md")
-        if text:
-            reviews.append((chunk, text))
-    parts = [
-        "<!doctype html>",
-        "<html><head><meta charset='utf-8'>",
-        f"<title>Flight wrap-up — {html.escape(flight.data['goal'][:60])}</title>",
-        f"<style>{_STYLE}</style></head><body>",
-        f"<h1>Flight wrap-up</h1>",
-        f"<p><strong>Goal.</strong> {html.escape(flight.data['goal'])}</p>",
-        f"<p class='muted'>Branch <code>{html.escape(flight.data['branch'])}</code> · "
+    subtitle = (
+        f"Branch <code>{html.escape(flight.data['branch'])}</code> · "
         f"status <strong>{html.escape(flight.data['status'])}</strong> · "
         f"{flight.data['iteration']} iterations · "
-        f"base <code>{html.escape(flight.data['base'][:12])}</code></p>",
-        "<h2>Acceptance</h2>",
-        markdown(acceptance) if acceptance else "<p class='muted'>No acceptance verdict was written.</p>",
-        "<h2>Chunks and tasks</h2>",
-        _task_table(flight),
-    ]
+        f"base <code>{html.escape(flight.data['base'][:12])}</code>"
+    )
+    parts = ["<h2>Chunks and tasks</h2>", _task_table(flight)]
     follow_ups = flight.parked_tasks()
     parts.append("<h2>Follow-ups</h2>")
     if follow_ups:
@@ -61,13 +65,15 @@ def wrap_up(flight: Flight) -> str:
                 f"<td>{html.escape(item['answer'] or '(unanswered)')}</td></tr>"
             )
         parts.append("</table>")
-    for chunk, text in reviews:
-        parts.append(f"<h2>Review — chunk {chunk['id']}: {html.escape(chunk['title'])}</h2>")
-        parts.append(markdown(text))
+    for chunk in flight.chunks:
+        text = _read(flight.dir / "reviews" / f"chunk-{chunk['id']}.md")
+        if text:
+            parts.append(f"<h2>Review — chunk {chunk['id']}: {html.escape(chunk['title'])}</h2>")
+            parts.append(markdown(text))
     parts.append("<h2>Event log (last 40)</h2><pre>")
     parts.append(html.escape("\n".join(flight.recent_events(40))))
-    parts.append("</pre></body></html>")
-    return "\n".join(parts)
+    parts.append("</pre>")
+    return page(flight.data["goal"], acceptance, subtitle=subtitle, appendix="\n".join(parts))
 
 
 def _task_table(flight: Flight) -> str:

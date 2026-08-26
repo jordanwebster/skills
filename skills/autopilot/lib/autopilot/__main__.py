@@ -154,6 +154,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("notes", help="print the flight notes")
     p.set_defaults(handler=cmd_notes)
+
+    p = sub.add_parser("land", help="after landing: keep the record, remove the workspace, list follow-ups")
+    p.add_argument("--no-open", action="store_true")
+    p.set_defaults(handler=cmd_land)
+
+    p = sub.add_parser("page", help="render a front-page Markdown file as HTML and open it")
+    p.add_argument("markdown", type=Path)
+    p.add_argument("--title", help="page title (default: the file's first heading or name)")
+    p.add_argument("--out", type=Path, help="where to write the HTML (default: beside the Markdown)")
+    p.add_argument("--no-open", action="store_true")
+    p.set_defaults(handler=cmd_page)
     return parser
 
 
@@ -285,8 +296,25 @@ def cmd_drive(args: argparse.Namespace) -> int:
     return 0 if status in ("landed", "stopped") else 2
 
 
+def _records_dir(root: Path) -> Path:
+    base = os.environ.get("AUTOPILOT_RECORDS") or str(Path.home() / ".local" / "state" / "autopilot")
+    return Path(base).expanduser() / root.name
+
+
 def cmd_status(args: argparse.Namespace) -> int:
-    flight = _flight()
+    try:
+        flight = _flight()
+    except StateError:
+        records = _records_dir(Path(os.getcwd()).resolve())
+        past = sorted(records.glob("*/wrap-up.html")) if records.is_dir() else []
+        if not past:
+            raise
+        latest = past[-1]
+        print(f"No flight in progress here. Last landed flight: {latest.parent.name}")
+        print(f"Wrap-up: {latest}")
+        if args.open:
+            _open_in_browser(latest)
+        return 0
     driver = supervise.read_status(flight.runtime_dir)
     if args.json:
         print(json.dumps({"flight": flight.data, "driver": driver.__dict__}, indent=2, sort_keys=True))
@@ -528,6 +556,61 @@ def cmd_answer(args: argparse.Namespace) -> int:
         print(f"Driver relaunched (pid {pid}).")
     elif flight.open_escalations():
         print("Other escalations are still open; relaunch with `autopilot start` when all are answered.")
+    return 0
+
+
+def cmd_land(args: argparse.Namespace) -> int:
+    flight = _flight()
+    if flight.data["status"] != "landed":
+        raise StateError(f"the flight is {flight.data['status']}, not landed; nothing to tidy yet")
+    if supervise.locked_owner(flight.runtime_dir):
+        raise StateError("a driver is still running; stop it first")
+    if gitops.is_dirty(flight.root):
+        raise StateError("the working tree is dirty; commit or stash first")
+    stamp = flight.data.get("created", "")[:10].replace("-", "") or "flight"
+    record = _records_dir(flight.root) / f"{_slug(flight.data['goal'])}-{stamp}"
+    record.mkdir(parents=True, exist_ok=True)
+    for name in ("wrap-up.html", "acceptance.md", "flight.json", "NOTES.md", "events.log", "requirements.md", "flight-plan.html"):
+        source = flight.dir / name
+        if source.exists():
+            shutil.copyfile(source, record / name)
+    if (flight.dir / "reviews").is_dir():
+        shutil.copytree(flight.dir / "reviews", record / "reviews", dirs_exist_ok=True)
+    follow_ups = flight.parked_tasks()
+    gitops.git(flight.root, "rm", "-r", "-q", "--cached", ".autopilot")
+    shutil.rmtree(flight.dir)
+    gitops.commit_all(flight.root, "Remove flight workspace")
+    print(f"Flight record kept at {record}")
+    print(f"Branch {flight.data['branch']} is ready for review and merge; the wrap-up page is its front page.")
+    if follow_ups:
+        print("Follow-ups to file (on the operator's word), e.g. with the tasks skill:")
+        for task in follow_ups:
+            print(f"  tasks add \"{task['title']}\" --later")
+    if not args.no_open:
+        _open_in_browser(record / "wrap-up.html")
+    return 0
+
+
+def cmd_page(args: argparse.Namespace) -> int:
+    source: Path = args.markdown
+    try:
+        body = source.read_text(encoding="utf-8")
+    except OSError as error:
+        raise StateError(f"cannot read {source}: {error}") from error
+    title = args.title
+    lines = body.splitlines()
+    if not title:
+        heading = next((line for line in lines if line.startswith("# ")), None)
+        if heading:
+            title = heading[2:].strip()
+            body = "\n".join(line for line in lines if line is not heading)
+        else:
+            title = source.stem.replace("-", " ")
+    out = args.out or source.with_suffix(".html")
+    out.write_text(render.page(title, body), encoding="utf-8")
+    print(f"Wrote {out}")
+    if not args.no_open:
+        _open_in_browser(out)
     return 0
 
 

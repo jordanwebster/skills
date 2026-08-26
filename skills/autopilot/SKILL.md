@@ -56,17 +56,24 @@ PATH; the chat agent calls it by path.
    block and launches the driver detached. The operator may close the
    chat; the driver has its own heartbeat and log.
 6. **The loop** (below) runs until the flight lands or needs the operator.
-7. **Landing.** The closer judges the result against the requirements;
-   `.autopilot/wrap-up.html` is written and `autopilot status --open`
-   shows it. That page is the flight's account of itself — when a review
-   skill such as `handoff` encloses the work, it is that skill's front
-   page, produced by the flight rather than reconstructed afterwards.
-   Merge is the operator's act; the wrap-up commit that removes
-   `.autopilot/` keeps the product's history free of flight vocabulary.
+7. **Landing.** The closer judges the result against the requirements
+   and writes the front page — what changed, proof, over to you, friction
+   and follow-ups — which becomes `.autopilot/wrap-up.html`, the one page
+   the operator reads. `autopilot status --open` shows it. It is the
+   flight's handoff, produced by the flight rather than reconstructed
+   afterwards; the `handoff` skill's page has the same shape and renderer.
+8. **`autopilot land`.** Once landed: keeps the record (wrap-up, plan,
+   acceptance, notes, reviews) under `~/.local/state/autopilot/<repo>/`,
+   removes `.autopilot/` from the branch in one commit so the product's
+   history carries no flight vocabulary, opens the wrap-up, and prints the
+   parked follow-ups as `tasks add … --later` lines to file on the
+   operator's word. Merge is the operator's act; after it, close the task
+   the flight delivered through `tasks`.
 
 Any agent, any time: **`autopilot status`** answers "how is it going?"
 from the state on disk — chunk progress, the task in hand, open
-questions, recent events, and whether the driver is alive.
+questions, recent events, and whether the driver is alive. After
+`autopilot land`, it points at the kept record instead.
 
 ## The loop
 
