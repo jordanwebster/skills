@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Local task backend: one JSON file, no service, no credentials.
+
+Protocol (shared by every backend): argv[1] is the operation; stdin carries
+one JSON request {"protocol", "operation", "config", "args"}; stdout carries
+the JSON result — a task, a list of tasks, or {"error": "..."}.
+
+A task is {"id", "title", "body", "state": open|closed|canceled, "labels",
+"repo", "url", "created", "updated"}.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+
+def store_path(config: dict) -> Path:
+    explicit = os.environ.get("TASKS_LOCAL_STORE") or config.get("path")
+    return Path(explicit).expanduser() if explicit else Path.home() / ".local" / "state" / "tasks" / "tasks.json"
+
+
+def load(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {"next_id": 1, "tasks": []}
+
+
+def save(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".tasks.")
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary, path)
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def find(data: dict, task_id: str) -> dict:
+    for task in data["tasks"]:
+        if task["id"] == task_id:
+            return task
+    raise KeyError(f"no task {task_id}")
+
+
+def main() -> int:
+    request = json.load(sys.stdin)
+    operation = request["operation"]
+    args = request.get("args", {})
+    path = store_path(request.get("config", {}))
+    data = load(path)
+
+    if operation == "list":
+        wanted_state = args.get("state", "open")
+        result = []
+        for task in data["tasks"]:
+            if args.get("repo") and task["repo"] != args["repo"]:
+                continue
+            if wanted_state == "open" and task["state"] != "open":
+                continue
+            if wanted_state == "closed" and task["state"] == "open":
+                continue
+            if any(label not in task["labels"] for label in args.get("labels") or []):
+                continue
+            needle = (args.get("search") or "").casefold()
+            if needle and needle not in (task["title"] + "\n" + task["body"]).casefold():
+                continue
+            result.append(task)
+        print(json.dumps(result))
+        return 0
+
+    if operation == "get":
+        print(json.dumps(find(data, args["id"])))
+        return 0
+
+    if operation == "create":
+        labels = list(dict.fromkeys(list(args.get("labels") or []) + [f"repo:{args['repo']}"]))
+        task = {
+            "id": f"T-{data['next_id']}",
+            "title": args["title"],
+            "body": args.get("body", ""),
+            "state": "open",
+            "labels": labels,
+            "repo": args["repo"],
+            "url": "",
+            "created": now(),
+            "updated": now(),
+        }
+        data["next_id"] += 1
+        data["tasks"].append(task)
+        save(path, data)
+        print(json.dumps(task))
+        return 0
+
+    if operation == "update":
+        task = find(data, args["id"])
+        if args.get("title") is not None:
+            task["title"] = args["title"]
+        if args.get("body") is not None:
+            task["body"] = args["body"]
+        for label in args.get("add_labels") or []:
+            if label not in task["labels"]:
+                task["labels"].append(label)
+        task["labels"] = [label for label in task["labels"] if label not in (args.get("remove_labels") or [])]
+        if args.get("state"):
+            task["state"] = args["state"]
+        task["updated"] = now()
+        save(path, data)
+        print(json.dumps(task))
+        return 0
+
+    if operation == "close":
+        task = find(data, args["id"])
+        task["state"] = "canceled" if args.get("cancel") else "closed"
+        if args.get("reason"):
+            task["body"] = (task["body"].rstrip() + f"\n\nClosed: {args['reason']}").strip()
+        task["updated"] = now()
+        save(path, data)
+        print(json.dumps(task))
+        return 0
+
+    print(json.dumps({"error": f"unknown operation {operation}"}))
+    return 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyError as error:
+        print(json.dumps({"error": str(error).strip("'")}))
+        sys.exit(1)

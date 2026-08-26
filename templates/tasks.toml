@@ -1,26 +1,17 @@
 # Operator-global tasks configuration. Copy to ~/.config/tasks/config.toml
-# (or point $TASKS_CONFIG at it). This is operator/machine-scope config —
-# backend, repo portfolio, authority — and never lives in a repository.
-#
-# When a repo-registry tool is configured, names, descriptions, paths, and
-# worktrees resolve through it; this file is the fallback.
+# (or point $TASKS_CONFIG at it). Backend choice and the repository
+# portfolio are operator facts at machine scope; they never live in a
+# repository.
 
 [backend]
-# provider = "linear"          # Omit to use filed.md outboxes.
-# workspace = "workspace"     # Default: sole authenticated workspace; ambiguity degrades.
-# team = "ENG"                # Default: sole accessible team; ambiguity degrades for writes.
-# ready_state = "Todo"        # Default: the team's ordinary unstarted state.
+provider = "local"            # or "linear"; `tasks backends` lists what is installed
+# path = "~/.local/state/tasks/tasks.json"   # local: where the file lives
+# team = "ENG"                # linear: team key (required when the key sees several)
+# api_key_env = "LINEAR_API_KEY"             # linear: environment variable holding the key
 
-# One entry per portfolio repo. The description is load-bearing: it is what
-# lets shaping assign a task to the right repo instead of guessing from the
-# name. The path is optional and machine-local, for when an agent must read
-# or enter the repo.
+# One entry per portfolio repository. The description is what lets an
+# agent assign a task to the right repository instead of guessing from the
+# name; the path maps a checkout to that name.
 # [repos.example]
-# description = "One line saying what this repo is and owns"
+# description = "One line saying what this repository is and owns"
 # path = "~/source/example"
-
-# Authority grants for external task writes (file, link, close, promote),
-# keyed by repo name — one auditable place for every grant. A repo not
-# listed gets no writes without the operator's in-conversation word.
-# [authority]
-# external_write = ["example"]

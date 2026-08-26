@@ -63,15 +63,13 @@ assert_all_links() {
 
 fresh_claude=$scratch/fresh/claude-skills
 fresh_agents=$scratch/fresh/agents-skills
-fresh_output=$(run_installer "$fresh_claude" "$fresh_agents" --skip-mcp)
+fresh_output=$(run_installer "$fresh_claude" "$fresh_agents")
 assert_all_links "$fresh_claude" "$fresh_agents"
 expected_link_total=$((skill_count * 2))
 printf '%s\n' "$fresh_output" | grep -q "Links created: $expected_link_total" || \
     fail "fresh install summary must count every created link"
-printf '%s\n' "$fresh_output" | grep -q 'MCP (Claude): skipped (--skip-mcp)' || \
-    fail "fresh install summary must report skipped MCP setup"
 
-second_output=$(run_installer "$fresh_claude" "$fresh_agents" --skip-mcp)
+second_output=$(run_installer "$fresh_claude" "$fresh_agents")
 assert_all_links "$fresh_claude" "$fresh_agents"
 printf '%s\n' "$second_output" | grep -q 'Links created: 0' || \
     fail "idempotent install must not recreate links"
@@ -96,8 +94,6 @@ printf '%s\n' "$selective_output" | grep -q 'Skills: handoff' || \
     fail "selective install summary must name handoff"
 printf '%s\n' "$selective_output" | grep -q 'Links created: 2' || \
     fail "selective install must create one link per harness"
-printf '%s\n' "$selective_output" | grep -q 'MCP (Claude): not applicable (tasks not selected)' || \
-    fail "installing handoff alone must not configure Linear MCP"
 
 autopilot_claude=$scratch/autopilot/claude-skills
 autopilot_agents=$scratch/autopilot/agents-skills
@@ -108,9 +104,6 @@ printf '%s\n' "$autopilot_install_output" | grep -q 'Skills: autopilot' || \
     fail "selective install summary must name autopilot"
 printf '%s\n' "$autopilot_install_output" | grep -q 'Links created: 2' || \
     fail "selective autopilot install must create one link per harness"
-printf '%s\n' "$autopilot_install_output" | \
-    grep -q 'MCP (Claude): not applicable (tasks not selected)' || \
-    fail "installing autopilot alone must not configure Linear MCP"
 
 autopilot_uninstall_output=$(
     run_installer "$autopilot_claude" "$autopilot_agents" --uninstall autopilot
@@ -131,7 +124,7 @@ foreign_path=$conflict_agents/handoff
 printf 'foreign content\n' >"$foreign_path"
 
 set +e
-conflict_output=$(run_installer "$conflict_claude" "$conflict_agents" --skip-mcp 2>&1)
+conflict_output=$(run_installer "$conflict_claude" "$conflict_agents" 2>&1)
 conflict_status=$?
 set -e
 [ "$conflict_status" -ne 0 ] || fail "a foreign destination must make install exit non-zero"
@@ -152,7 +145,7 @@ done
 
 uninstall_claude=$scratch/uninstall/claude-skills
 uninstall_agents=$scratch/uninstall/agents-skills
-run_installer "$uninstall_claude" "$uninstall_agents" --skip-mcp >/dev/null
+run_installer "$uninstall_claude" "$uninstall_agents" >/dev/null
 foreign_target=$scratch/foreign-tasks
 mkdir "$foreign_target"
 rm "$uninstall_agents/tasks"

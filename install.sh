@@ -3,10 +3,8 @@ set -euo pipefail
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 skills_root=$repo_root/skills
-linear_url=https://mcp.linear.app/mcp
 
 action=install
-skip_mcp=false
 agent_config=false
 requested_count=0
 selected_count=0
@@ -14,7 +12,7 @@ requested_skills=()
 selected_paths=()
 
 usage() {
-    echo "usage: ./install.sh [--uninstall] [--skip-mcp] [--agent-config] [skill ...]"
+    echo "usage: ./install.sh [--uninstall] [--agent-config] [skill ...]"
     echo "  --agent-config  install config/global-agents.md as the global"
     echo "                  ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md (symlinks);"
     echo "                  with no skill arguments, installs only the config"
@@ -24,9 +22,6 @@ while [ "$#" -gt 0 ]; do
     case $1 in
         --uninstall)
             action=uninstall
-            ;;
-        --skip-mcp)
-            skip_mcp=true
             ;;
         --agent-config)
             agent_config=true
@@ -163,15 +158,6 @@ if [ "$selected_count" -eq 0 ]; then
     exit 1
 fi
 
-tasks_selected=false
-selected_index=0
-while [ "$selected_index" -lt "$selected_count" ]; do
-    if [ "${selected_paths[$selected_index]##*/}" = tasks ]; then
-        tasks_selected=true
-    fi
-    selected_index=$((selected_index + 1))
-done
-
 claude_skills_dir=${HANDOFF_CLAUDE_SKILLS_DIR:-"${HOME:?HOME is required when HANDOFF_CLAUDE_SKILLS_DIR is unset}/.claude/skills"}
 agents_skills_dir=${HANDOFF_AGENTS_SKILLS_DIR:-"${HOME:?HOME is required when HANDOFF_AGENTS_SKILLS_DIR is unset}/.agents/skills"}
 
@@ -256,55 +242,6 @@ while [ "$selected_index" -lt "$selected_count" ]; do
     selected_index=$((selected_index + 1))
 done
 
-claude_mcp_status="not changed during uninstall"
-codex_mcp_status="not changed during uninstall"
-
-configure_claude_mcp() {
-    if ! command -v claude >/dev/null 2>&1; then
-        claude_mcp_status="skipped (claude CLI not found)"
-        echo "NOTICE: claude CLI not found; skipping Linear MCP setup"
-    elif claude mcp get linear-server >/dev/null 2>&1; then
-        claude_mcp_status="already configured"
-        echo "MCP ALREADY CONFIGURED: Claude linear-server"
-    elif claude mcp add --scope user --transport http linear-server "$linear_url"; then
-        claude_mcp_status="configured"
-        echo "MCP CONFIGURED: Claude linear-server"
-    else
-        claude_mcp_status="not configured (command failed)"
-        echo "NOTICE: Claude Linear MCP setup failed; task integration will be unavailable" >&2
-    fi
-}
-
-configure_codex_mcp() {
-    if ! command -v codex >/dev/null 2>&1; then
-        codex_mcp_status="skipped (codex CLI not found)"
-        echo "NOTICE: codex CLI not found; skipping Linear MCP setup"
-    elif codex mcp get linear >/dev/null 2>&1; then
-        codex_mcp_status="already configured"
-        echo "MCP ALREADY CONFIGURED: Codex linear"
-    elif codex mcp add linear --url "$linear_url"; then
-        codex_mcp_status="configured"
-        echo "MCP CONFIGURED: Codex linear"
-    else
-        codex_mcp_status="not configured (command failed)"
-        echo "NOTICE: Codex Linear MCP setup failed; task integration will be unavailable" >&2
-    fi
-}
-
-if [ "$action" = install ]; then
-    if [ "$tasks_selected" = false ]; then
-        claude_mcp_status="not applicable (tasks not selected)"
-        codex_mcp_status="not applicable (tasks not selected)"
-    elif [ "$skip_mcp" = true ]; then
-        claude_mcp_status="skipped (--skip-mcp)"
-        codex_mcp_status="skipped (--skip-mcp)"
-        echo "NOTICE: Linear MCP setup skipped"
-    else
-        configure_claude_mcp
-        configure_codex_mcp
-    fi
-fi
-
 echo
 echo "Summary"
 printf '  Skills:'
@@ -323,8 +260,6 @@ else
     echo "  Links already absent: $links_absent"
     echo "  Links left untouched: $links_untouched"
 fi
-echo "  MCP (Claude): $claude_mcp_status"
-echo "  MCP (Codex): $codex_mcp_status"
 echo "  Consumer repo setup: $repo_root/docs/INSTALL.md"
 
 if [ "$action" = install ] && [ "$links_refused" -gt 0 ]; then

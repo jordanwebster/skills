@@ -1,0 +1,291 @@
+"""The `tasks` command: find, file, edit, and close tracked work.
+
+The command knows nothing about any tracker. It reads the operator's
+config, tags every task with the repository it belongs to, and hands each
+operation to a backend executable that speaks JSON on stdin and stdout.
+Adding a tracker means adding one executable, not editing this file.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tomllib
+from typing import Any
+
+
+BACKENDS_DIR = Path(__file__).resolve().parent.parent.parent / "backends"
+PROTOCOL_VERSION = 1
+
+
+class TasksError(RuntimeError):
+    pass
+
+
+# -- config ---------------------------------------------------------------------------
+
+
+def config_path() -> Path:
+    explicit = os.environ.get("TASKS_CONFIG")
+    return Path(explicit).expanduser() if explicit else Path.home() / ".config" / "tasks" / "config.toml"
+
+
+def load_config() -> dict[str, Any]:
+    path = config_path()
+    if not path.exists():
+        return {"backend": {"provider": "local"}, "repos": {}}
+    try:
+        with path.open("rb") as handle:
+            value = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise TasksError(f"cannot read {path}: {error}") from error
+    value.setdefault("backend", {}).setdefault("provider", "local")
+    value.setdefault("repos", {})
+    return value
+
+
+def current_repo(config: dict[str, Any], explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    if os.environ.get("TASKS_REPO"):
+        return os.environ["TASKS_REPO"]
+    try:
+        top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        top = os.getcwd()
+    name = Path(top).name
+    for repo, entry in config["repos"].items():
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if path and Path(path).expanduser().resolve() == Path(top).resolve():
+            return repo
+    return name
+
+
+# -- backend protocol -------------------------------------------------------------------
+
+
+def backend_executable(provider: str) -> Path:
+    name = f"tasks-backend-{provider}"
+    bundled = BACKENDS_DIR / name
+    if bundled.is_file() and os.access(bundled, os.X_OK):
+        return bundled
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(directory) / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    raise TasksError(
+        f"no backend named {provider!r}: expected {bundled} or {name} on PATH "
+        f"(available: {', '.join(available_backends()) or 'none'})"
+    )
+
+
+def available_backends() -> list[str]:
+    names: set[str] = set()
+    for path in BACKENDS_DIR.glob("tasks-backend-*"):
+        if os.access(path, os.X_OK):
+            names.add(path.name.removeprefix("tasks-backend-"))
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        for path in Path(directory).glob("tasks-backend-*") if Path(directory).is_dir() else []:
+            if os.access(path, os.X_OK):
+                names.add(path.name.removeprefix("tasks-backend-"))
+    return sorted(names)
+
+
+def call(config: dict[str, Any], operation: str, **arguments: Any) -> Any:
+    provider = config["backend"]["provider"]
+    executable = backend_executable(provider)
+    request = {
+        "protocol": PROTOCOL_VERSION,
+        "operation": operation,
+        "config": config["backend"],
+        "args": arguments,
+    }
+    try:
+        completed = subprocess.run(
+            [str(executable), operation],
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise TasksError(f"backend {provider} timed out on {operation}") from error
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip() or "no detail"
+        raise TasksError(f"backend {provider} failed on {operation}: {detail}")
+    try:
+        response = json.loads(completed.stdout or "null")
+    except json.JSONDecodeError as error:
+        raise TasksError(f"backend {provider} returned invalid JSON for {operation}") from error
+    if isinstance(response, dict) and "error" in response:
+        raise TasksError(f"backend {provider}: {response['error']}")
+    return response
+
+
+# -- commands -------------------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return args.handler(args) or 0
+    except TasksError as error:
+        print(f"tasks: {error}", file=sys.stderr)
+        return 1
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="tasks", description="Find, file, edit, and close tracked work.")
+    parser.add_argument("--repo", help="repository the task belongs to (default: the current one)")
+    parser.add_argument("--json", action="store_true", help="machine-readable output")
+    # The same two options are accepted after the verb, where agents
+    # naturally put them; SUPPRESS keeps a value given before the verb.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--repo", default=argparse.SUPPRESS)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("list", parents=[common], help="open tasks for this repository")
+    p.add_argument("--all-repos", action="store_true")
+    p.add_argument("--state", choices=("open", "closed", "all"), default="open")
+    p.add_argument("--label", action="append", default=[])
+    p.add_argument("--search", help="text to match in titles and bodies")
+    p.set_defaults(handler=cmd_list)
+
+    p = sub.add_parser("show", parents=[common], help="one task in full")
+    p.add_argument("id")
+    p.set_defaults(handler=cmd_show)
+
+    p = sub.add_parser("add", parents=[common], help="file a task (an open task with the same title is returned instead)")
+    p.add_argument("title")
+    p.add_argument("--body", default="")
+    p.add_argument("--label", action="append", default=[])
+    p.add_argument("--later", action="store_true", help="a follow-up nobody is scheduling yet")
+    p.set_defaults(handler=cmd_add)
+
+    p = sub.add_parser("edit", parents=[common], help="change a task's title, body, or labels")
+    p.add_argument("id")
+    p.add_argument("--title")
+    p.add_argument("--body")
+    p.add_argument("--add-label", action="append", default=[])
+    p.add_argument("--remove-label", action="append", default=[])
+    p.set_defaults(handler=cmd_edit)
+
+    p = sub.add_parser("close", parents=[common], help="mark a task done (or --cancel)")
+    p.add_argument("id")
+    p.add_argument("--reason", default="")
+    p.add_argument("--cancel", action="store_true")
+    p.set_defaults(handler=cmd_close)
+
+    p = sub.add_parser("reopen", parents=[common], help="put a closed task back")
+    p.add_argument("id")
+    p.set_defaults(handler=cmd_reopen)
+
+    p = sub.add_parser("backends", parents=[common], help="backends this install can use")
+    p.set_defaults(handler=cmd_backends)
+    return parser
+
+
+def _emit(args: argparse.Namespace, value: Any, text: str) -> None:
+    if args.json:
+        print(json.dumps(value, indent=2, sort_keys=True))
+    else:
+        print(text)
+
+
+def _line(task: dict[str, Any]) -> str:
+    labels = " ".join(f"[{label}]" for label in task.get("labels", []) if not label.startswith("repo:"))
+    state = "" if task.get("state") == "open" else f" ({task.get('state')})"
+    return f"{task['id']:<10} {task['title']}{state} {labels}".rstrip()
+
+
+def _detail(task: dict[str, Any]) -> str:
+    lines = [f"{task['id']}  {task['title']}", f"state: {task.get('state')}  repo: {task.get('repo', '')}"]
+    if task.get("labels"):
+        lines.append("labels: " + ", ".join(task["labels"]))
+    if task.get("url"):
+        lines.append(f"url: {task['url']}")
+    if task.get("body"):
+        lines += ["", task["body"].rstrip()]
+    return "\n".join(lines)
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    config = load_config()
+    repo = None if args.all_repos else current_repo(config, args.repo)
+    tasks = call(config, "list", repo=repo, state=args.state, labels=args.label, search=args.search)
+    text = "\n".join(_line(task) for task in tasks) or "No tasks."
+    _emit(args, tasks, text)
+    return 0
+
+
+def cmd_show(args: argparse.Namespace) -> int:
+    config = load_config()
+    task = call(config, "get", id=args.id)
+    _emit(args, task, _detail(task))
+    return 0
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    config = load_config()
+    repo = current_repo(config, args.repo)
+    labels = list(dict.fromkeys(args.label + (["later"] if args.later else [])))
+    existing = call(config, "list", repo=repo, state="open", labels=[], search=args.title)
+    duplicate = next((task for task in existing if task["title"].strip().casefold() == args.title.strip().casefold()), None)
+    if duplicate:
+        _emit(args, duplicate, f"Already filed: {_line(duplicate)}")
+        return 0
+    task = call(config, "create", repo=repo, title=args.title, body=args.body, labels=labels)
+    _emit(args, task, f"Filed: {_line(task)}")
+    return 0
+
+
+def cmd_edit(args: argparse.Namespace) -> int:
+    config = load_config()
+    task = call(
+        config,
+        "update",
+        id=args.id,
+        title=args.title,
+        body=args.body,
+        add_labels=args.add_label,
+        remove_labels=args.remove_label,
+    )
+    _emit(args, task, f"Updated: {_line(task)}")
+    return 0
+
+
+def cmd_close(args: argparse.Namespace) -> int:
+    config = load_config()
+    task = call(config, "close", id=args.id, reason=args.reason, cancel=args.cancel)
+    _emit(args, task, f"{'Canceled' if args.cancel else 'Closed'}: {_line(task)}")
+    return 0
+
+
+def cmd_reopen(args: argparse.Namespace) -> int:
+    config = load_config()
+    task = call(config, "update", id=args.id, state="open")
+    _emit(args, task, f"Reopened: {_line(task)}")
+    return 0
+
+
+def cmd_backends(args: argparse.Namespace) -> int:
+    config = load_config()
+    names = available_backends()
+    current = config["backend"]["provider"]
+    _emit(args, {"available": names, "configured": current}, "\n".join(
+        f"{name}{'  (configured)' if name == current else ''}" for name in names
+    ) or "No backends found.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

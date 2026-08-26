@@ -1,0 +1,229 @@
+#!/usr/bin/env python3
+"""Linear task backend over the public GraphQL API.
+
+Needs an API key in the environment variable the config names
+(`api_key_env`, default LINEAR_API_KEY) and a team key (`team`, else the
+sole team the key can see). Labels are created on first use. Speaks the
+same stdin/stdout JSON protocol as every tasks backend.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+
+ENDPOINT = "https://api.linear.app/graphql"
+FIELDS = """
+  id identifier title description url createdAt updatedAt
+  team { key }
+  state { id name type }
+  labels { nodes { id name } }
+"""
+
+
+class LinearError(RuntimeError):
+    pass
+
+
+class Linear:
+    def __init__(self, config: dict):
+        key_name = config.get("api_key_env", "LINEAR_API_KEY")
+        self.key = os.environ.get(key_name)
+        if not self.key:
+            raise LinearError(f"set {key_name} to a Linear API key")
+        self.team_key = config.get("team")
+        self._team: dict | None = None
+        self._labels: dict[str, str] | None = None
+        self._states: list[dict] | None = None
+
+    def query(self, text: str, variables: dict | None = None) -> dict:
+        payload = json.dumps({"query": text, "variables": variables or {}}).encode("utf-8")
+        request = urllib.request.Request(
+            ENDPOINT,
+            data=payload,
+            headers={"Content-Type": "application/json", "Authorization": self.key},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            raise LinearError(f"Linear returned HTTP {error.code}: {error.read().decode('utf-8', 'replace')[:300]}") from error
+        except urllib.error.URLError as error:
+            raise LinearError(f"cannot reach Linear: {error.reason}") from error
+        if body.get("errors"):
+            raise LinearError("; ".join(item.get("message", "?") for item in body["errors"]))
+        return body["data"]
+
+    # -- lookups ----------------------------------------------------------------
+
+    def team(self) -> dict:
+        if self._team is None:
+            teams = self.query("{ teams { nodes { id key name } } }")["teams"]["nodes"]
+            if self.team_key:
+                matches = [team for team in teams if team["key"] == self.team_key]
+            else:
+                matches = teams
+            if len(matches) != 1:
+                raise LinearError(
+                    "set backend.team to one of: " + ", ".join(team["key"] for team in teams)
+                )
+            self._team = matches[0]
+        return self._team
+
+    def labels(self) -> dict[str, str]:
+        if self._labels is None:
+            nodes = self.query(
+                "query($teamId: ID!) { team(id: $teamId) { labels(first: 250) { nodes { id name } } } "
+                "  issueLabels(first: 250, filter: { team: { null: true } }) { nodes { id name } } }",
+                {"teamId": self.team()["id"]},
+            )
+            self._labels = {}
+            for node in nodes["issueLabels"]["nodes"] + nodes["team"]["labels"]["nodes"]:
+                self._labels[node["name"]] = node["id"]
+        return self._labels
+
+    def label_ids(self, names: list[str]) -> list[str]:
+        ids = []
+        for name in names:
+            if name not in self.labels():
+                created = self.query(
+                    "mutation($input: IssueLabelCreateInput!) { issueLabelCreate(input: $input) { issueLabel { id name } } }",
+                    {"input": {"name": name, "teamId": self.team()["id"]}},
+                )["issueLabelCreate"]["issueLabel"]
+                self.labels()[created["name"]] = created["id"]
+            ids.append(self.labels()[name])
+        return ids
+
+    def states(self) -> list[dict]:
+        if self._states is None:
+            self._states = self.query(
+                "query($teamId: ID!) { team(id: $teamId) { states { nodes { id name type position } } } }",
+                {"teamId": self.team()["id"]},
+            )["team"]["states"]["nodes"]
+        return self._states
+
+    def state_for(self, kind: str) -> str:
+        wanted = {"open": "unstarted", "closed": "completed", "canceled": "canceled"}[kind]
+        candidates = sorted((s for s in self.states() if s["type"] == wanted), key=lambda s: s["position"])
+        if not candidates:
+            raise LinearError(f"team has no {wanted} workflow state")
+        return candidates[0]["id"]
+
+    def issue(self, identifier: str) -> dict:
+        key, _, number = identifier.rpartition("-")
+        if not number.isdigit():
+            raise LinearError(f"{identifier} is not a Linear identifier like {self.team()['key']}-123")
+        nodes = self.query(
+            "query($filter: IssueFilter) { issues(filter: $filter, first: 1) { nodes { " + FIELDS + " } } }",
+            {"filter": {"number": {"eq": int(number)}, "team": {"key": {"eq": key or self.team()["key"]}}}},
+        )["issues"]["nodes"]
+        if not nodes:
+            raise LinearError(f"no issue {identifier}")
+        return nodes[0]
+
+
+def shape(issue: dict) -> dict:
+    labels = [node["name"] for node in issue["labels"]["nodes"]]
+    repo = next((label.removeprefix("repo:") for label in labels if label.startswith("repo:")), "")
+    state_type = issue["state"]["type"]
+    state = "closed" if state_type == "completed" else "canceled" if state_type == "canceled" else "open"
+    return {
+        "id": issue["identifier"],
+        "title": issue["title"],
+        "body": issue.get("description") or "",
+        "state": state,
+        "labels": labels,
+        "repo": repo,
+        "url": issue["url"],
+        "created": issue["createdAt"],
+        "updated": issue["updatedAt"],
+    }
+
+
+def main() -> int:
+    request = json.load(sys.stdin)
+    operation = request["operation"]
+    args = request.get("args", {})
+    linear = Linear(request.get("config", {}))
+
+    if operation == "list":
+        filters: dict = {"team": {"key": {"eq": linear.team()["key"]}}}
+        state = args.get("state", "open")
+        if state == "open":
+            filters["state"] = {"type": {"in": ["backlog", "unstarted", "started"]}}
+        elif state == "closed":
+            filters["state"] = {"type": {"in": ["completed", "canceled"]}}
+        wanted_labels = list(args.get("labels") or [])
+        if args.get("repo"):
+            wanted_labels.append(f"repo:{args['repo']}")
+        if wanted_labels:
+            filters["labels"] = {"every": {"name": {"in": wanted_labels}}} if len(wanted_labels) > 1 else {"name": {"eq": wanted_labels[0]}}
+        if args.get("search"):
+            filters["title"] = {"containsIgnoreCase": args["search"]}
+        nodes = linear.query(
+            "query($filter: IssueFilter) { issues(filter: $filter, first: 100, orderBy: updatedAt) { nodes { " + FIELDS + " } } }",
+            {"filter": filters},
+        )["issues"]["nodes"]
+        print(json.dumps([shape(node) for node in nodes]))
+        return 0
+
+    if operation == "get":
+        print(json.dumps(shape(linear.issue(args["id"]))))
+        return 0
+
+    if operation == "create":
+        labels = list(dict.fromkeys(list(args.get("labels") or []) + [f"repo:{args['repo']}"]))
+        created = linear.query(
+            "mutation($input: IssueCreateInput!) { issueCreate(input: $input) { issue { " + FIELDS + " } } }",
+            {
+                "input": {
+                    "teamId": linear.team()["id"],
+                    "title": args["title"],
+                    "description": args.get("body") or None,
+                    "labelIds": linear.label_ids(labels),
+                }
+            },
+        )["issueCreate"]["issue"]
+        print(json.dumps(shape(created)))
+        return 0
+
+    if operation in ("update", "close"):
+        issue = linear.issue(args["id"])
+        update: dict = {}
+        if operation == "close":
+            update["stateId"] = linear.state_for("canceled" if args.get("cancel") else "closed")
+            if args.get("reason"):
+                update["description"] = ((issue.get("description") or "").rstrip() + f"\n\nClosed: {args['reason']}").strip()
+        else:
+            if args.get("title") is not None:
+                update["title"] = args["title"]
+            if args.get("body") is not None:
+                update["description"] = args["body"]
+            if args.get("state"):
+                update["stateId"] = linear.state_for(args["state"])
+            if args.get("add_labels") or args.get("remove_labels"):
+                current = [node["name"] for node in issue["labels"]["nodes"]]
+                names = [name for name in current if name not in (args.get("remove_labels") or [])]
+                names += [name for name in (args.get("add_labels") or []) if name not in names]
+                update["labelIds"] = linear.label_ids(names)
+        updated = linear.query(
+            "mutation($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { issue { " + FIELDS + " } } }",
+            {"id": issue["id"], "input": update},
+        )["issueUpdate"]["issue"]
+        print(json.dumps(shape(updated)))
+        return 0
+
+    print(json.dumps({"error": f"unknown operation {operation}"}))
+    return 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except LinearError as error:
+        print(json.dumps({"error": str(error)}))
+        sys.exit(1)
