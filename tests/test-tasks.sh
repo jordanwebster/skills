@@ -24,7 +24,8 @@ assert_eq "Already filed: T-1        filed   Fix the widget" "$duplicate" "add i
 timeout 30 "$tasks" add "Polish" >/dev/null
 
 workable=$(timeout 30 "$tasks" list)
-assert_eq "No tasks." "$workable" "filed tasks are inert: list shows only ready and doing"
+assert_eq "No tasks ready or doing.
+Also open: 2 filed  (tasks list --stage filed)" "$workable" "filed tasks are inert but counted"
 filed_count=$(timeout 30 "$tasks" list --stage filed --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
 assert_eq "2" "$filed_count" "--stage filed shows the backlog"
 
@@ -34,7 +35,10 @@ printf '%s\n' "$(timeout 30 "$tasks" show T-1)" | grep -q 'Requirements: stop th
 
 ready=$(timeout 30 "$tasks" ready T-1)
 printf '%s\n' "$ready" | grep -q 'ready   Fix the widget' || fail "ready must promote the task"
-assert_eq "T-1        ready   Fix the widget" "$(timeout 30 "$tasks" list)" "a ready task is workable"
+assert_eq "T-1        ready   Fix the widget
+Also open: 1 filed  (tasks list --stage filed)" "$(timeout 30 "$tasks" list)" "a ready task is workable; the backlog is summarised"
+ready_json=$(timeout 30 "$tasks" list --json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')
+assert_eq "1" "$ready_json" "--json carries only the listed tasks"
 
 started=$(timeout 30 "$tasks" start T-1)
 printf '%s\n' "$started" | grep -q 'doing   Fix the widget' || fail "start must mark the task doing"

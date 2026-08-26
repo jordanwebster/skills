@@ -256,9 +256,19 @@ def cmd_list(args: argparse.Namespace) -> int:
         stages = [args.stage]
     else:
         stages = list(WORKABLE)
-    tasks = call(config, "list", repo=repo, state=args.state, stages=stages, labels=args.label, search=args.search)
-    text = "\n".join(_line(task) for task in tasks) or "No tasks."
-    _emit(args, tasks, text)
+    every = call(config, "list", repo=repo, state=args.state, stages=[], labels=args.label, search=args.search)
+    tasks = [task for task in every if not stages or task.get("stage", "filed") in stages]
+    text = "\n".join(_line(task) for task in tasks)
+    if stages == list(WORKABLE):
+        # The default view hides the backlog; say how much is hidden so it
+        # is discoverable without a flag the operator has to remember.
+        hidden = [task for task in every if task.get("stage", "filed") not in WORKABLE]
+        counts = {stage: sum(1 for task in hidden if task.get("stage", "filed") == stage) for stage in STAGES if stage not in WORKABLE}
+        text = text or "No tasks ready or doing."
+        if hidden:
+            text += "\nAlso open: " + ", ".join(f"{count} {stage}" for stage, count in counts.items() if count)
+            text += "  (tasks list --stage " + "|".join(stage for stage, count in counts.items() if count) + ")"
+    _emit(args, tasks, text or "No tasks.")
     return 0
 
 
