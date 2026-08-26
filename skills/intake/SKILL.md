@@ -50,6 +50,13 @@ unfinished placeholders, then atomically writes
 `<contract>.acceptance.json`. It cannot judge semantic consistency or confer
 authority; invoking it asserts that the operator already gave the final all-ok.
 
+Return the confirmed contract to the conversational concierge. For one-sitting
+work, it normally resolves the configured implementer through Delegate unless
+the current session is explicitly known to satisfy that binding; use a
+specialist when the work materially requires one. Work that must cross several
+implementation contexts instead proceeds to fresh Autopilot planning. Intake
+records acceptance but does not make either staffing decision.
+
 ## Consumes
 
 - The settled conversation and relevant read-only substrate observations.

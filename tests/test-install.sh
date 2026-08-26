@@ -16,17 +16,17 @@ for skill_path in "$repo_root"/skills/*; do
     [ -d "$skill_path" ] || continue
     skill_count=$((skill_count + 1))
 done
-[ "$skill_count" -ge 3 ] || fail "installer test requires all three repository skills"
-[ -d "$repo_root/skills/handoff" ] || fail "installer test requires the handoff skill"
-[ -d "$repo_root/skills/autopilot" ] || fail "installer test requires the autopilot skill"
-[ -d "$repo_root/skills/tasks" ] || fail "installer test requires the tasks skill"
+[ "$skill_count" -ge 5 ] || fail "installer test requires the lifecycle and supporting skills"
+for required_skill in intake delegate autopilot handoff tasks; do
+    [ -d "$repo_root/skills/$required_skill" ] || fail "installer test requires the $required_skill skill"
+done
 
 command_count=0
 for skill_path in "$repo_root"/skills/*; do
     [ -x "$skill_path/scripts/${skill_path##*/}" ] || continue
     command_count=$((command_count + 1))
 done
-[ "$command_count" -ge 2 ] || fail "installer test expects autopilot and tasks to ship commands"
+[ "$command_count" -ge 5 ] || fail "installer test expects every lifecycle skill to ship its justified command"
 
 run_installer() {
     claude_dir=$1
@@ -83,8 +83,10 @@ fresh_agents=$scratch/fresh/agents-skills
 fresh_output=$(run_installer "$fresh_claude" "$fresh_agents")
 assert_all_links "$fresh_claude" "$fresh_agents"
 assert_command_link "$scratch/fresh/bin" autopilot
+assert_command_link "$scratch/fresh/bin" delegate
+assert_command_link "$scratch/fresh/bin" handoff
+assert_command_link "$scratch/fresh/bin" intake
 assert_command_link "$scratch/fresh/bin" tasks
-[ ! -e "$scratch/fresh/bin/handoff" ] || fail "handoff ships no command of its own"
 printf '%s\n' "$fresh_output" | grep -q "NOTE: $scratch/fresh/bin is not on your PATH" || \
     fail "install must say when the command directory is not on PATH"
 expected_link_total=$((skill_count * 2 + command_count))
@@ -114,8 +116,9 @@ for skill_path in "$repo_root"/skills/*; do
 done
 printf '%s\n' "$selective_output" | grep -q 'Skills: handoff' || \
     fail "selective install summary must name handoff"
-printf '%s\n' "$selective_output" | grep -q 'Links created: 2' || \
-    fail "selective install must create one link per harness"
+printf '%s\n' "$selective_output" | grep -q 'Links created: 3' || \
+    fail "selective install must create one link per harness plus the command"
+assert_command_link "$scratch/selective/bin" handoff
 
 autopilot_claude=$scratch/autopilot/claude-skills
 autopilot_agents=$scratch/autopilot/agents-skills

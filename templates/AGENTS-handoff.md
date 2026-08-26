@@ -1,13 +1,12 @@
 ## Handoff
 
-Work whose promise a diff cannot show ends with proof of it working where
-a user would see it; work that cannot be judged in one sitting ends with a
-handoff page — what changed, proof, an independent review, and the
-decisions only the operator can make. Use the `handoff` skill from the
-start: the proof plan comes before the code. Small self-contained fixes
-whose diff shows everything end with a passing test and a clear commit
-message. Evidence lives untracked under `.handoff/`; merge is the
-operator's act.
+Work whose promise a diff cannot show ends with proof where a user would see
+it. An easily judged behavior change needs only compact proof; ordinary small
+work may use a natural screenshot or transcript without adopting a Handoff
+workflow. Work that is risky, long, architectural, inbound, or difficult to
+judge ends with one Handoff decision page and one independent review. For that
+work, use the `handoff` skill from the start so the evidence plan precedes the
+code. Evidence lives untracked under `.handoff/`; merge is the operator's act.
 
 ### Capturing proof here
 

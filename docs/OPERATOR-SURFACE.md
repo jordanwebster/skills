@@ -62,3 +62,32 @@ Every row carries its provenance: **operator-stated** or **agent-proposed**.
 - One operator account per boundary crossing: work is presented to the
   operator once at alignment and once at completion. No surface duplicates
   another's account of the same work.
+
+## Acceptance and proof
+
+Keep four boundaries distinct:
+
+1. The **acceptance contract** records the outcomes, exclusions,
+   demonstrations, limitations, and exceptional acts the operator confirmed.
+2. The **evidence plan** records how the implementer or planner will cover those
+   demonstrations: tools, fixtures, environments, replay recipes, and checks.
+3. **Evidence artifacts** are the actual captures at the reviewed commit.
+4. The **proof bundle** joins product-language claims to the accepted
+   demonstrations, artifacts, replay recipes, and explicit gaps.
+
+Coverage is many-to-many. One capture may cover several demonstrations and one
+demonstration may need several captures. The invariant is no uncovered promise,
+not one row, task, or artifact per promise. A replay recipe is a command,
+concise interaction steps, or an accepted not-replayable reason with its
+limitation.
+
+Completion is proportional:
+
+- If a diff and focused checks show the promise, use an ordinary response.
+- If behavior needs a demonstration but is easy to judge, show compact proof.
+- If work is risky, long, architectural, inbound, or difficult to judge, show
+  one decision page with one independent review.
+
+Default completion surfaces contain what changed, proof, material gaps or
+decisions, and meaningful follow-ups. Tasks, chunks, dispatches, events,
+internal IDs, and manufactured checks or concerns remain in diagnostics.

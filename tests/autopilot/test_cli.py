@@ -1,28 +1,70 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 import unittest
 
-from autopilot import approval, supervise
+from autopilot import supervise
 from autopilot.state import Flight
 
-from helpers import FlightCase, git, plan_markdown, task, toy_plan
+from helpers import FlightCase, SKILL_DIR, git, plan_markdown, task, toy_plan
 
 
 class CliTests(FlightCase):
     def test_init_plan_start_status_end_to_end(self) -> None:
         contract = self.base / "acceptance.md"
-        contract.write_text("# Acceptance\n\nThe toy result is visible.\n")
-        contract.with_name(contract.name + ".acceptance.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "contract_digest": approval.digest_bytes(contract.read_bytes()),
-                    "confirmed_at": "2026-01-01T00:00:00+00:00",
-                }
-            )
+        contract.write_text(
+            """# Acceptance contract
+
+## Goal
+
+Build the toy result.
+
+## Observable expectations
+
+- The toy result is visible. <!-- id: toy-result -->
+
+## Exclusions
+
+- None.
+
+## Acceptance scenarios
+
+- Show the completed toy result. <!-- id: show-result; covers: toy-result -->
+  - Demonstration: A transcript contains the completed result.
+  - Limitation: None.
+
+## Material decisions
+
+- None.
+
+## Accepted gaps
+
+- None.
+
+## Exceptional operator acts
+
+- None.
+
+## Waivers
+
+- None.
+
+## Confirmation
+
+Final all-ok: CONFIRMED
+"""
         )
+        finalized = subprocess.run(
+            [str(SKILL_DIR.parent / "intake" / "scripts" / "intake"), "finalize", str(contract), "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(finalized.returncode, 0, finalized.stderr)
+        self.assertTrue(json.loads(finalized.stdout)["ok"])
         init = self.cli("init", "--goal", "Build the toy", "--requirements", str(contract))
         self.assertEqual(init.returncode, 0, init.stderr)
         self.assertEqual(git(self.root, "rev-parse", "--abbrev-ref", "HEAD").strip(), "autopilot/build-the-toy")

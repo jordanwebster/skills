@@ -11,7 +11,8 @@ cd /absolute/path/to/skills
 
 With no skill names, the installer symlinks every directory under `skills/`
 into both `~/.claude/skills/` and `~/.agents/skills/`, and links each
-skill's command (`autopilot`, `tasks`) into `~/.local/bin` (or
+skill's bundled command (`intake`, `delegate`, `autopilot`, `handoff`, and
+`tasks`) into `~/.local/bin` (or
 `$SKILLS_BIN_DIR`) so the commands the skills print work in a plain shell.
 Name one or more skills to install only that subset:
 
@@ -40,12 +41,16 @@ to a local JSON file. The `linear` backend needs a Linear API key in the
 environment (`LINEAR_API_KEY` by default) and, when the key sees several
 teams, a team key in the config. The delegate roster lives at
 `~/.config/delegate/roster.toml`; see `skills/delegate/templates/roster.toml`,
-and run `autopilot preflight` inside a planned flight after editing it.
+and run `delegate doctor` after editing it. Doctor is local and never launches
+or spends a provider call. Autopilot also resolves every actual role and effort
+during its deterministic preflight.
 
 Proof capture needs whatever the promise needs: a browser driver such as
 Playwright for screenshots and recordings of web UI, nothing extra for
 command transcripts. A flight plan lists the commands that prove those
-tools exist and refuses to take off when one fails.
+tools exist and refuses to take off when one fails. Handoff reads the public
+`proof.json` bundle documented under `skills/handoff/references/` and renders
+compact proof or a reviewed decision page with `handoff finish`.
 
 While there is one user, installations intentionally follow the latest global
 checkout and version skew is accepted. Revisit release tags when a colleague

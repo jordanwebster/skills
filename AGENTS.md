@@ -15,6 +15,9 @@ spec. Design decisions are recorded in commit messages.
   and bundled scripts or prompts) so one source serves Claude Code and Codex;
   never write harness-specific variants. Bundled CLIs are Python 3.11+
   standard library only.
+- Earn new public CLI surface through dogfooding. Add a verb only when repeated
+  mechanical friction shows that deterministic code will improve consistency;
+  do not add commands for symmetry or a hypothetical future caller.
 - This repo is its own first consumer: once the machinery exists, work here
   goes through it. Until then, make granular commits with clear messages and
   never squash.
