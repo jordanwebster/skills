@@ -1,118 +1,56 @@
 ---
 name: delegate
-description: Staffing policy - resolves role tags (planner, implementer, ui-developer, prober, qa-tester, reviewer, closer) to model bindings via an operator-owned roster, with escalation rules. Use when dispatching work to agents by role.
+description: Resolve or diagnose agent staffing by mapping a requested role and effort through the operator-owned roster to a mind and dispatch specification. Use when an agent or driver will dispatch work, or when a binding cannot launch. Do not use merely because ordinary work is being discussed or performed locally.
 ---
 
 # Delegate
 
-Which mind runs which piece of work, decided by policy instead of by
-whatever happened to launch the run. Delegate owns two things: the role
-contracts below and the shape of the operator's roster file. It owns no
-performance record — the operator's own reading of results, and the
-consuming run's ledger, are the evidence bindings change on. It owns no judgment loop: a
-dispatcher consulting delegate is a lookup, and everything the operator ever
-decides about staffing is decided in the roster file or at a plan gate —
-delegate has no mid-run operator surface, structurally.
+Delegate is deterministic staffing infrastructure. The caller chooses the work
+and role; Delegate resolves the operator's policy without making a provider call.
 
-## The roster
+## Resolve staffing
 
-Concrete bindings live only in the operator-owned roster file, resolved in
-order: `$DELEGATE_ROSTER` if set, else `~/.config/delegate/roster.toml`.
-Copy `templates/roster.toml` there to start. Each entry binds a role to a
-CLI invocation, model, and effort; an entry may also record `effort_arg`,
-the exact flag or config key its CLI accepts effort through (codex:
-`-c model_reasoning_effort=<effort>`), so a dispatcher never needs per-CLI
-knowledge. A role tag that matches no entry is an error, never a silent
-substitution: an unattended run must fail before it starts on a typo, not
-run a task on whatever model happened to be first.
+Bindings live in `$DELEGATE_ROSTER`, or
+`~/.config/delegate/roster.toml` when it is unset. Start from
+[templates/roster.toml](templates/roster.toml). The roster is operator-owned;
+agents may propose a change but never silently substitute or rewrite a binding.
 
-CLI flags and model names age. `autopilot preflight` is the roster's
-doctor: it resolves every role a plan will dispatch, checks each CLI is
-installed, and launches each distinct binding once with a trivial prompt —
-the only way to learn that a recorded flag is still accepted. Run it after
-editing the roster; `autopilot start` runs it before every takeoff.
+```text
+delegate resolve <role> [--effort E] [--json]
+delegate doctor [--role <role>] [--effort E] [--json]
+```
 
-Agents propose roster changes as rows for the operator's explicit yes —
-each row its own yes, never inferred from one successful flight. The roster
-schema has no oracle or answer-key role and never will: verification
-authority belongs to the operator personally and is not a staffing
-question.
+`resolve --json` is the composition boundary. It returns the semantic mind,
+constraints, a preferred native transport description, and a fully constructed
+fallback CLI argv. Treat `command` as an argv array, never shell text. Unknown
+roles and `unavailable = "reason"` are hard configuration failures.
 
-## The roles
+`doctor` parses and resolves the roster, constructs commands, and checks local
+executables. It never launches an agent or spends provider capacity. The first
+real dispatch is the connectivity and authentication test.
 
-| Role | Contract | Writes product? | Binding guidance |
-| --- | --- | --- | --- |
-| `planner` | Fresh context; reads only confirmed requirements and the substrate; writes the plan. Also replans: at a retry cap, splits, re-briefs, rebinds, parks, or escalates — never "try again" | no (edits the task list) | Strongest available; never economize here |
-| `implementer` | Pulls ready tasks in a chunk, edits code and tests, commits what passes | yes | Strong by default; the natural first candidate for cheaper-tier experiments |
-| `ui-developer` | Same contract as implementer, for user-interface work | yes | Family-constrained in practice; record the constraint in the roster, not in prose |
-| `prober` | Read-only reconnaissance: substrate probes, captures, corpus sweeps; writes findings | no (fixtures a task asks for excepted) | Mid-tier; volume over brilliance |
-| `qa-tester` | Pokes at the product like a human: common flows, naive usage; reports what broke and files defects as tasks | no | Cheap on purpose — a too-clever agent works around rough edges instead of reporting them |
-| `reviewer` | Reviews one finished chunk against a fixed must-fix bar; files must-fix findings as tasks; never the author; a cross-family check additionally requires a different model family than the author's | no | High floor |
-| `closer` | Judges the finished flight against the confirmed requirements, not the task list; accepts or files the gaps, once | no | Strong, and a different family from the implementer when the roster allows |
+The caller selects its richest transport for the resolved mind: a compatible
+native subagent when available, otherwise the returned fallback command. It
+records the actual transport and any requested property that transport could
+not honor. The caller owns the prompt, cwd, process lifetime, redaction, and
+outcome classification.
 
-qa-tester runs when a change is user-facing; when in doubt, run it — it is
-cheap. The dispatcher owns the environment it is sent into: before
-dispatch, probe every URL the brief will name for the exact content under
-test, and generate any initial-state description from a live query at
-dispatch time, never from memory — so every failure the qa-tester reports
-is about the product, not the harness. Its findings become citable evidence in whatever end-of-work report
-encloses the change, or a short note to the operator when none does; the
-tooling gaps it hits are filed as inert task entries through a skill named
-`tasks` when available and authorized, else an outbox row.
+Read [references/roles.md](references/roles.md) when choosing or interpreting a
+role. A worker never selects its own role or effort.
 
-## Dispatch
+## Consumes
 
-A driver or dispatcher consuming delegate does exactly this per dispatch:
-read the work item's role tag; look it up in the roster; launch the bound
-mind with the prompt its own machinery assembled. Delegate never authors prompts and never selects work.
+- A caller-selected role and optional effort.
+- The operator-owned roster.
 
-A brief dispatched into a repository whose own instructions trigger a
-review skill states who owns that review — a sub-agent must never have to
-infer its position in the run. The review skill's own rule (delegated
-chunks decline and report evidence upward) is the backstop when a brief
-forgets.
+## Produces
 
-A loop of dispatches — a design-review cycle, a fix loop, anything run
-"until aligned" — is bounded by a stop bar fixed before the first round:
-the dispatcher, as the operator's proxy, writes down what severity of
-finding forces another round and adjudicates every finding against it.
-The stop condition is never handed to a participant — a reviewer briefed
-to be adversarial always finds something, so "until the reviewer
-approves" does not terminate. Findings below the bar are recorded, not
-chased; a round producing only below-bar findings ends the loop.
+- A validated mind: family, model, effort, and constraints.
+- Preferred and fallback transport descriptions, including fallback argv.
+- One actionable configuration failure when resolution is impossible.
 
-Effort resolves in the same mechanical order as the role: a phase's effort
-tag from the plan if one exists (assigned by the planner, visible in the
-staffing shape the operator approved), else the roster's effort for the
-role. A worker never sets its own effort — effort is always assigned from outside,
-by roster, plan, or a replanning pass.
+## Does not own
 
-A binding names the **mind** — family, model, effort — not how to reach it.
-Transport is the dispatcher's richest available channel for that mind: a
-native subagent when dispatching from inside a harness of the same family
-(a Claude session dispatches claude-bound roles as subagents, a Codex
-session likewise for its own); the roster's CLI invocation when crossing
-families or dispatching from a script; a shared agent bus when one is
-configured — that slot is reserved for amux and empty until it exists. Same
-mind, same prompt, whichever channel carries it. A native channel may
-honor only part of a binding — Claude's subagents take a model override
-but no effort setting; dispatch anyway and note the shortfall in the
-consuming run's records, never silently rebind.
-
-## Escalation
-
-When a dispatch fails at its retry cap and the failure pattern says the
-binding was too weak — mid-task judgment errors, not typos — the planner escalates in two rungs: first raise effort one step on the same
-model (the cheaper remedy, when the failure smells like too little
-deliberation rather than an incapable mind), then re-dispatch one model
-tier up, each used once and each recorded like any other replanning decision
-in the consuming run's records. Repeated escalations on a role are a
-roster proposal, put to the operator as a row; they are never a silent
-rebinding.
-
-## Deliberately absent
-
-Delegate reads role tags from the artifacts of whatever run consults it. It
-does not read task backlogs, pick up ready work, or start runs — that
-orchestrator, if it ever exists, is a separate decision the operator makes
-explicitly. Absence here is design, not omission.
+- Work selection, role assignment, prompt construction, or agent execution.
+- Retry policy, escalation judgment, or mid-run rebinding.
+- Provider connectivity checks or performance history.

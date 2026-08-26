@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Resolve through symlinks so this launcher works installed and from a checkout.
+set -euo pipefail
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+export PYTHONPATH="$here/../lib${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m delegate "$@"

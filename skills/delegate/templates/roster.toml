@@ -2,17 +2,17 @@
 # (or point $DELEGATE_ROSTER at it). Agents may propose edits as rows for your
 # explicit yes; only you write this file.
 #
-# Each binding names the mind: family (via cli), model, and optionally
-# effort. `effort_arg` optionally records the exact flag or config key the
-# CLI accepts effort through, so dispatchers need no per-CLI knowledge.
-# The cli/args lines are the fallback transport — a dispatcher
-# running inside a harness of the same family uses its native subagents
-# instead, and a shared agent bus (amux) takes over when configured.
-# An unattended driver always uses cli/args: put the flags an unattended
-# run needs there (claude: a permission mode; codex: a sandbox mode).
-# A role the roster does not name is an error at dispatch, never a silent
-# substitution; `autopilot preflight` checks every role a plan uses, that
-# each CLI is installed, and that each binding actually launches.
+# Each binding names the mind (family, model, effort) and its fallback CLI.
+# Family is inferred from claude/codex CLI names; set `family` for another
+# adapter. `effort_arg` may record the exact effort flag template and an inline
+# `constraints` table may record approval-relevant limits such as sandbox or
+# authority.
+#
+# `delegate resolve` constructs fallback argv. `delegate doctor` checks the
+# roster, command shape, and executable locally without launching a provider.
+# The first real dispatch is the connectivity and authentication check. A role
+# absent from this file is an error, never a silent substitution. To park a role
+# explicitly, replace its binding with `unavailable = "reason"`.
 #
 # There is deliberately no oracle or answer-key role: verification authority
 # is the operator's personally and is not a staffing question.
