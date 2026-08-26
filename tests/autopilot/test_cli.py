@@ -15,13 +15,13 @@ class CliTests(FlightCase):
         init = self.cli("init", "--goal", "Build the toy")
         self.assertEqual(init.returncode, 0, init.stderr)
         self.assertEqual(git(self.root, "rev-parse", "--abbrev-ref", "HEAD").strip(), "autopilot/build-the-toy")
-        self.assertIn("Start flight", git(self.root, "log", "--oneline"))
+        self.assertEqual(git(self.root, "status", "--porcelain").strip(), "", "flight state is untracked")
+        self.assertNotIn("flight", git(self.root, "log", "--oneline").casefold())
         missing = self.cli("plan", "--no-open")
         self.assertEqual(missing.returncode, 1)
         self.assertIn("no plan", missing.stderr)
         Flight(self.root).plan_path.write_text(plan_html(toy_plan([task(1, "first"), task(2, "second")])))
         self.assertEqual(self.cli("plan", "--no-open").returncode, 0)
-        self.assertIn("Add the flight plan", git(self.root, "log", "--oneline"))
 
         started = self.cli("start")
         self.assertEqual(started.returncode, 0, started.stderr)
@@ -45,7 +45,7 @@ class CliTests(FlightCase):
         self.assertIn("Flight record kept", landed.stdout)
         self.assertFalse((self.root / ".autopilot").exists())
         self.assertEqual(git(self.root, "status", "--porcelain").strip(), "")
-        self.assertIn("Remove flight workspace", git(self.root, "log", "--oneline"))
+        self.assertNotIn("flight", git(self.root, "log", "--oneline").casefold())
         kept = list((records / "repo").glob("*/wrap-up.html"))
         self.assertEqual(len(kept), 1)
         self.assertIn("WHAT", kept[0].read_text() + "WHAT")
@@ -113,7 +113,6 @@ class CliTests(FlightCase):
         flight.load()
         self.assertEqual(flight.task(1)["status"], "todo")
         self.assertEqual(len(flight.open_escalations()), 1)
-        self.assertIn("Record operator answer", git(self.root, "log", "--oneline"))
 
     def test_stop_kills_a_running_driver(self) -> None:
         flight = self.seed(toy_plan([task(1, "first")]))

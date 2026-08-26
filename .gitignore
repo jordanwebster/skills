@@ -3,7 +3,7 @@ notes/
 
 # Untracked-by-convention evidence and machinery workspaces.
 .handoff/
-.autopilot/runtime/
+.autopilot/
 
 # Python bytecode from the bundled CLIs.
 __pycache__/

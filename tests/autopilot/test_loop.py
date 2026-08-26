@@ -36,7 +36,7 @@ class LoopTests(FlightCase):
         self.assertEqual(git(self.root, "rev-parse", "--abbrev-ref", "HEAD").strip(), "autopilot/toy")
         log = git(self.root, "log", "--oneline")
         self.assertIn("Add 1.txt", log)
-        self.assertIn("Land the flight", log)
+        self.assertNotIn("flight", log.casefold(), "flight state never enters the product's history")
         # Both tasks in chunk 1 share a role, so one agent pulled them together.
         self.assertLessEqual(flight.data["iteration"], 5)
 

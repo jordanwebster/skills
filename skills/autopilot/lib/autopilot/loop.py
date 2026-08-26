@@ -62,7 +62,7 @@ class Driver:
         flight = self.flight
         root = flight.root
         gitops.ensure_branch(root, flight.data["branch"])
-        gitops.exclude(root, ".autopilot/runtime/")
+        gitops.exclude(root, ".autopilot/")
         self._recover()
         flight.data["status"] = "running"
         flight.save()
@@ -160,7 +160,7 @@ class Driver:
             flight.note(selected, f"Iteration {iteration} made no progress on this task ({outcome.detail}).")
             flight.event(f"iteration {iteration}: no progress on task {task['id']}")
         flight.save()
-        self._commit("Record flight progress", wip=f"WIP: {task['title']}")
+        self._commit_leftovers(f"WIP: {task['title']}")
 
     def _confirm(self, task: dict[str, Any], iteration: int) -> None:
         flight = self.flight
@@ -188,12 +188,9 @@ class Driver:
     ) -> dispatch.Outcome:
         flight = self.flight
         flight.data["iteration"] += 1
-        flight.data["dispatches"] = flight.data.get("dispatches", 0) + 1
         iteration = flight.data["iteration"]
         flight.save()
         binding = self.roster.resolve(role, effort)
-        if binding.used_default:
-            flight.event(f"iteration {iteration}: role {role} is not in the roster; using default")
         env = dict(os.environ if self.environment is None else self.environment)
         env["PATH"] = f"{prompt.SCRIPTS_DIR}{os.pathsep}{env.get('PATH', '')}"
         env.update(
@@ -204,10 +201,11 @@ class Driver:
             }
         )
         env.update(extra_env or {})
-        log_path = flight.runtime_dir / "logs" / f"{flight.data['dispatches']:03d}-{role}.log"
+        log_path = flight.runtime_dir / "logs" / f"{flight.dispatch_count() + 1:03d}-{role}.log"
         flight.event(f"iteration {iteration}: {role} via {binding.label} on {summary}")
         if self.supervisor is not None:
             self.supervisor.set_state("running", f"iteration {iteration}: {role} on {summary}")
+        started = time.monotonic()
         outcome = dispatch.run_agent(
             binding,
             text,
@@ -217,12 +215,14 @@ class Driver:
             environment=env,
         )
         flight.event(f"iteration {iteration}: agent exit {outcome.exit_class} — {outcome.detail}")
+        # The agent may have rewritten the state file; reload before recording.
+        flight.load()
+        flight.record_dispatch(role, binding.label, time.monotonic() - started, outcome.exit_class)
         if outcome.exit_class == dispatch.EXIT_INFRA:
             # The agent never ran, so the iteration is refunded: provider
             # trouble must not eat the flight's ceiling.
-            flight.load()
             flight.data["iteration"] -= 1
-            flight.save()
+        flight.save()
         return outcome
 
     # -- chunk and flight completion ---------------------------------------------------
@@ -253,7 +253,6 @@ class Driver:
                     )
                     flight.event(f"chunk {chunk['id']}: verification keeps failing; escalated")
                 flight.save()
-                self._commit("Record chunk verification")
                 return
         if chunk.get("review") and not chunk.get("reviewed"):
             chunk["reviewed"] = True
@@ -278,13 +277,11 @@ class Driver:
             filed = [task for task in flight.tasks if task["id"] not in ids_before]
             flight.event(f"chunk {chunk['id']}: review filed {len(filed)} task(s)")
             flight.save()
-            self._commit(f"Record review of chunk {chunk['id']}")
             if any(task["status"] == "todo" for task in filed):
                 return
         chunk["status"] = "done"
         flight.event(f"chunk {chunk['id']} done — {chunk['title']}")
         flight.save()
-        self._commit(f"Complete chunk {chunk['id']}")
 
     def _close_flight(self) -> None:
         flight = self.flight
@@ -309,7 +306,6 @@ class Driver:
                     )
                     flight.event("whole-flight verification failed; filed a fix task")
                     flight.save()
-                    self._commit("Record whole-flight verification")
                     return
                 flight.add_escalation(
                     None,
@@ -347,13 +343,11 @@ class Driver:
         if gaps:
             flight.event(f"acceptance: closer filed {len(gaps)} gap task(s)")
             flight.save()
-            self._commit("Record acceptance gaps")
             return
         flight.data["status"] = "landed"
         (flight.dir / "wrap-up.html").write_text(render.wrap_up(flight), encoding="utf-8")
         flight.event("flight landed")
         flight.save()
-        self._commit("Land the flight")
         notify("Autopilot", f"Flight landed: {flight.data['goal'][:80]}")
         raise FlightEnded("landed")
 
@@ -385,7 +379,6 @@ class Driver:
             )
             flight.event(f"task {task['id']} parked after an inconclusive replan")
         flight.save()
-        self._commit(f"Record replan of task {task['id']}")
 
     # -- housekeeping -------------------------------------------------------------------
 
@@ -396,17 +389,16 @@ class Driver:
                 flight.set_status(task, "todo")
                 flight.note(task, "The driver restarted while this task was in progress; check the tree before continuing.")
         flight.save()
-        self._commit("Record flight progress", wip="WIP: recover uncommitted work")
+        self._commit_leftovers("WIP: recover uncommitted work")
 
-    def _commit(self, message: str, *, wip: str | None = None) -> None:
-        """Commit whatever the iteration left behind; product changes get the WIP message."""
+    def _commit_leftovers(self, message: str) -> None:
+        """Commit product changes an agent left uncommitted so nothing is lost.
 
-        root = self.flight.root
-        dirty = gitops.dirty_paths(root)
-        if not dirty:
-            return
-        product_dirty = any(not path.startswith(".autopilot/") for path in dirty)
-        gitops.commit_all(root, wip if product_dirty and wip else message)
+        Flight state is untracked, so the only thing that can be dirty here is
+        the product; a clean tree commits nothing."""
+
+        if gitops.is_dirty(self.flight.root):
+            gitops.commit_all(self.flight.root, message)
 
     def _infra(self, outcome: dispatch.Outcome) -> None:
         """Provider trouble: never an attempt. Pause after a streak; give up eventually."""
@@ -444,7 +436,6 @@ class Driver:
         flight.data["status"] = status
         flight.event(f"flight {status}: {reason}")
         flight.save()
-        self._commit("Record flight state")
         if status in ("escalated", "exhausted"):
             notify("Autopilot", f"Flight {status}: {reason[:120]}")
         return status

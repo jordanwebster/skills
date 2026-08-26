@@ -219,7 +219,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     if flight.exists():
         raise StateError(f"a flight already exists at {flight.dir}; land or remove it first")
     branch = args.branch or f"autopilot/{_slug(args.goal)}"
-    gitops.exclude(root, ".autopilot/runtime/")
+    gitops.exclude(root, ".autopilot/")
     if gitops.is_dirty(root):
         raise StateError("the working tree is dirty; commit or stash before starting a flight")
     gitops.ensure_branch(root, branch)
@@ -227,8 +227,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     if args.requirements:
         shutil.copyfile(args.requirements, flight.requirements_path)
     flight.event(f"flight created on {branch}")
-    gitops.commit_all(root, f"Start flight: {args.goal.strip()[:60]}")
-    print(f"Flight created in {flight.dir} on branch {branch}.")
+    print(f"Flight created in {flight.dir} (untracked) on branch {branch}.")
     print("Next: write the plan (`autopilot plan --dispatch`, or dispatch the planner yourself), review it, then `autopilot start`.")
     return 0
 
@@ -260,8 +259,6 @@ def cmd_plan(args: argparse.Namespace) -> int:
     if not flight.plan_path.exists():
         raise StateError(f"no plan at {flight.plan_path}; write one from the template or run with --dispatch")
     read_plan(flight.plan_path)
-    if flight.plan_path.exists() and gitops.is_dirty(flight.root):
-        gitops.commit_all(flight.root, "Add the flight plan")
     if not args.no_open:
         _open_in_browser(flight.plan_path)
     return 0
@@ -274,7 +271,6 @@ def cmd_start(args: argparse.Namespace) -> int:
     if not flight.tasks:
         seed_flight(flight, read_plan(flight.plan_path))
         flight.event(f"seeded {len(flight.tasks)} tasks in {len(flight.chunks)} chunks from the plan")
-        gitops.commit_all(flight.root, "Seed flight tasks from the plan")
     if args.foreground:
         return cmd_drive(argparse.Namespace(root=flight.root, max_iterations=args.max_iterations))
     if supervise.locked_owner(flight.runtime_dir):
@@ -547,7 +543,6 @@ def cmd_answer(args: argparse.Namespace) -> int:
     escalation = flight.answer_escalation(args.id, args.text)
     flight.save()
     flight.event(f"escalation #{escalation['id']} answered")
-    gitops.commit_all(flight.root, "Record operator answer")
     print(f"Answer recorded for #{escalation['id']}.")
     if args.no_start or supervise.locked_owner(flight.runtime_dir):
         return 0
@@ -565,21 +560,13 @@ def cmd_land(args: argparse.Namespace) -> int:
         raise StateError(f"the flight is {flight.data['status']}, not landed; nothing to tidy yet")
     if supervise.locked_owner(flight.runtime_dir):
         raise StateError("a driver is still running; stop it first")
-    if gitops.is_dirty(flight.root):
-        raise StateError("the working tree is dirty; commit or stash first")
     stamp = flight.data.get("created", "")[:10].replace("-", "") or "flight"
     record = _records_dir(flight.root) / f"{_slug(flight.data['goal'])}-{stamp}"
-    record.mkdir(parents=True, exist_ok=True)
-    for name in ("wrap-up.html", "acceptance.md", "flight.json", "NOTES.md", "events.log", "requirements.md", "flight-plan.html"):
-        source = flight.dir / name
-        if source.exists():
-            shutil.copyfile(source, record / name)
-    if (flight.dir / "reviews").is_dir():
-        shutil.copytree(flight.dir / "reviews", record / "reviews", dirs_exist_ok=True)
+    if record.exists():
+        raise StateError(f"a record already exists at {record}; move it aside first")
+    record.parent.mkdir(parents=True, exist_ok=True)
     follow_ups = flight.parked_tasks()
-    gitops.git(flight.root, "rm", "-r", "-q", "--cached", ".autopilot")
-    shutil.rmtree(flight.dir)
-    gitops.commit_all(flight.root, "Remove flight workspace")
+    shutil.move(str(flight.dir), str(record))
     print(f"Flight record kept at {record}")
     print(f"Branch {flight.data['branch']} is ready for review and merge; the wrap-up page is its front page.")
     if follow_ups:

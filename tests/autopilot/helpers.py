@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 
+from autopilot import gitops
 from autopilot.plan import read_plan, seed_flight
 from autopilot.roster import Roster
 from autopilot.state import Flight
@@ -105,12 +106,11 @@ class FlightCase(unittest.TestCase):
             self.env.pop(name, None)
 
     def seed(self, plan: dict) -> Flight:
+        gitops.exclude(self.root, ".autopilot/")
         flight = Flight(self.root).create(plan["goal"], "autopilot/toy", git(self.root, "rev-parse", "HEAD").strip())
         flight.plan_path.write_text(plan_html(plan))
         seed_flight(flight, read_plan(flight.plan_path))
         git(self.root, "checkout", "-q", "-b", "autopilot/toy")
-        git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "-m", "Start flight")
         return flight
 
     def cli(self, *arguments: str, cwd: Path | None = None, env: dict | None = None) -> subprocess.CompletedProcess:
