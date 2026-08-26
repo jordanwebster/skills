@@ -11,14 +11,14 @@ invisible.
   task list agents pull from and add to, one review per chunk, and a final
   acceptance against the requirements. Roles resolve to models through
   the delegate roster.
-- **handoff** — high-bandwidth review replacing code review: proofs, an
-  independent fresh-context reviewer, and a one-page front page for the
-  merge decision. Small self-contained fixes decline it and ship with a
-  passing test and a clear commit message. Authoritative design:
-  [`docs/SPEC.md`](docs/SPEC.md).
-- **tasks** — the backend-independent task seam: find, file, relate,
-  promote, and close tracked work; storage stays dumb and external writes
-  stay operator-authorized.
+- **handoff** — the merge decision on one page, read in the browser:
+  what changed, proof it works with its gaps, an independent fresh-context
+  review, and the decisions only the operator can make. Small
+  self-contained fixes decline it and ship with a passing test and a
+  clear commit message.
+- **tasks** — one `tasks` command over pluggable backends (a local file,
+  Linear): find, file, edit, and close tracked work; writes on the
+  operator's word.
 - **delegate** — staffing policy: role contracts, an operator-owned roster
   binding roles to models, a staffing log, and escalation.
 

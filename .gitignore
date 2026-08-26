@@ -5,10 +5,6 @@ notes/
 .handoff/
 .autopilot/runtime/
 
-# Local-only skill configuration; operator facts never enter shared history.
-.handoff.toml
-.tasks.toml
-
-# Python bytecode generated while exercising the loop framework.
+# Python bytecode from the bundled CLIs.
 __pycache__/
 *.py[cod]
