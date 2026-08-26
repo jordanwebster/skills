@@ -42,19 +42,15 @@ class CliTests(FlightCase):
         self.assertEqual(self.cli("start").returncode, 1, "a landed flight cannot restart")
         self.assertIn("No driver is running", self.cli("stop").stdout)
 
-        records = self.base / "records"
-        env = dict(self.env, AUTOPILOT_RECORDS=str(records))
-        landed = self.cli("land", "--no-open", env=env)
+        landed = self.cli("land")
         self.assertEqual(landed.returncode, 0, landed.stderr)
-        self.assertIn("Flight record kept", landed.stdout)
+        self.assertIn("Flight workspace deleted", landed.stdout)
         self.assertFalse((self.root / ".autopilot").exists())
         self.assertEqual(git(self.root, "status", "--porcelain").strip(), "")
         self.assertNotIn("flight", git(self.root, "log", "--oneline").casefold())
-        kept = list((records / "repo").glob("*/wrap-up.html"))
-        self.assertEqual(len(kept), 1)
-        self.assertIn("WHAT", kept[0].read_text() + "WHAT")
-        after = self.cli("status", env=env)
-        self.assertIn("Last landed flight", after.stdout)
+        after = self.cli("status")
+        self.assertEqual(after.returncode, 1)
+        self.assertIn("no flight found", after.stderr)
 
     def test_page_renders_markdown(self) -> None:
         source = self.base / "front-page.md"

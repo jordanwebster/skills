@@ -161,8 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("notes", help="print the flight notes")
     p.set_defaults(handler=cmd_notes)
 
-    p = sub.add_parser("land", help="after landing: keep the record, remove the workspace, list follow-ups")
-    p.add_argument("--no-open", action="store_true")
+    p = sub.add_parser("land", help="after landing: delete the workspace and list the follow-ups")
     p.set_defaults(handler=cmd_land)
 
     p = sub.add_parser("page", help="render a front-page Markdown file as HTML and open it")
@@ -328,25 +327,8 @@ def cmd_drive(args: argparse.Namespace) -> int:
     return 0 if status in ("landed", "stopped") else 2
 
 
-def _records_dir(root: Path) -> Path:
-    base = os.environ.get("AUTOPILOT_RECORDS") or str(Path.home() / ".local" / "state" / "autopilot")
-    return Path(base).expanduser() / root.name
-
-
 def cmd_status(args: argparse.Namespace) -> int:
-    try:
-        flight = _flight()
-    except StateError:
-        records = _records_dir(Path(os.getcwd()).resolve())
-        past = sorted(records.glob("*/wrap-up.html")) if records.is_dir() else []
-        if not past:
-            raise
-        latest = past[-1]
-        print(f"No flight in progress here. Last landed flight: {latest.parent.name}")
-        print(f"Wrap-up: {latest}")
-        if args.open:
-            _open_in_browser(latest)
-        return 0
+    flight = _flight()
     driver = supervise.read_status(flight.runtime_dir)
     if args.json:
         print(json.dumps({"flight": flight.data, "driver": driver.__dict__}, indent=2, sort_keys=True))
@@ -385,7 +367,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     if parked:
         print(f"Parked (follow-ups): {', '.join(str(task['id']) for task in parked)}")
     if flight.data["status"] == "landed":
-        print(f"Wrap-up: {flight.dir / 'wrap-up.html'}  (autopilot status --open)")
+        print(f"Wrap-up: {flight.dir / 'wrap-up.html'}  (autopilot status --open; `autopilot land` deletes the workspace once you have read it)")
     print("Recent events:")
     for line in flight.recent_events(8):
         print(f"  {line}")
@@ -603,21 +585,13 @@ def cmd_land(args: argparse.Namespace) -> int:
         raise StateError(f"the flight is {flight.data['status']}, not landed; nothing to tidy yet")
     if supervise.locked_owner(flight.runtime_dir):
         raise StateError("a driver is still running; stop it first")
-    stamp = flight.data.get("created", "")[:10].replace("-", "") or "flight"
-    record = _records_dir(flight.root) / f"{_slug(flight.data['goal'])}-{stamp}"
-    if record.exists():
-        raise StateError(f"a record already exists at {record}; move it aside first")
-    record.parent.mkdir(parents=True, exist_ok=True)
     follow_ups = flight.parked_tasks()
-    shutil.move(str(flight.dir), str(record))
-    print(f"Flight record kept at {record}")
-    print(f"Branch {flight.data['branch']} is ready for review and merge; the wrap-up page is its front page.")
+    shutil.rmtree(flight.dir)
+    print(f"Flight workspace deleted. Branch {flight.data['branch']} is ready for review and merge.")
     if follow_ups:
         print("Follow-ups to file (on the operator's word), e.g. with the tasks skill:")
         for task in follow_ups:
             print(f"  tasks add \"{task['title']}\"")
-    if not args.no_open:
-        _open_in_browser(record / "wrap-up.html")
     return 0
 
 

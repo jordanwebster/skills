@@ -72,19 +72,18 @@ calls it by path.
    operator reads. `autopilot status --open` shows it. It is the flight's
    handoff, produced by the flight rather than reconstructed afterwards;
    the `handoff` skill's page has the same shape and renderer.
-8. **`autopilot land`.** Once landed: moves `.autopilot/` — wrap-up, plan,
-   acceptance, evidence, notes, reviews, logs — to
-   `~/.local/state/autopilot/<repo>/`, opens the wrap-up, and prints the
-   parked follow-ups as `tasks add …` lines to file on the operator's word
-   (they land at stage filed, inert until gardened). Merge is the
-   operator's act; after it, close the task the flight delivered through
-   `tasks`.
+8. **`autopilot land`.** Once the operator has read the wrap-up: deletes
+   `.autopilot/` and prints the parked follow-ups as `tasks add …` lines
+   to file on the operator's word (they land at stage filed, inert until
+   gardened). Nothing of the flight remains in the repository. The page's
+   content lives on in the pull request description or merge commit, as
+   the `handoff` skill describes. Merge is the operator's act; after it,
+   close the task the flight delivered through `tasks`.
 
 Any agent, any time: **`autopilot status`** answers "how is it going?"
 from the state on disk — chunk progress, the task in hand, agents
 dispatched per role and binding with their wall time, open questions,
-recent events, and whether the driver is alive. After `autopilot land`,
-it points at the kept record instead.
+recent events, and whether the driver is alive.
 
 ## The loop
 
