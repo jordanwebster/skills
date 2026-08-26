@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+export PYTHONPATH="$here/../lib${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m handoff "$@"

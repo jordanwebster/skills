@@ -186,6 +186,15 @@ def main() -> int:
     args = request.get("args", {})
     linear = Linear(request.get("config", {}))
 
+    if operation == "doctor":
+        team = linear.team()
+        print(json.dumps({
+            "reachable": True,
+            "authenticated": True,
+            "detail": f"Linear team: {team['key']} ({team['name']})",
+        }))
+        return 0
+
     if operation == "list":
         filters: dict = {"team": {"key": {"eq": linear.team()["key"]}}}
         state = args.get("state", "open")

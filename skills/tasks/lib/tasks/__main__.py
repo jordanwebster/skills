@@ -9,6 +9,7 @@ Adding a tracker means adding one executable, not editing this file.
 from __future__ import annotations
 
 import argparse
+from difflib import SequenceMatcher
 import json
 import os
 from pathlib import Path
@@ -29,7 +30,10 @@ WORKABLE = ("ready", "doing")
 
 
 class TasksError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, failure_class: str = "backend", recovery: str | None = None):
+        super().__init__(message)
+        self.failure_class = failure_class
+        self.recovery = recovery or "Run `tasks doctor` for one actionable diagnosis."
 
 
 # -- config ---------------------------------------------------------------------------
@@ -48,9 +52,26 @@ def load_config() -> dict[str, Any]:
         with path.open("rb") as handle:
             value = tomllib.load(handle)
     except (OSError, tomllib.TOMLDecodeError) as error:
-        raise TasksError(f"cannot read {path}: {error}") from error
-    value.setdefault("backend", {}).setdefault("provider", "local")
-    value.setdefault("repos", {})
+        raise TasksError(
+            f"cannot read {path}: {error}",
+            failure_class="configuration",
+            recovery=f"Correct {path}, then retry the tasks command.",
+        ) from error
+    if not isinstance(value, dict):
+        raise TasksError(
+            f"cannot read {path}: top level must be a table",
+            failure_class="configuration",
+            recovery=f"Correct {path}, then retry the tasks command.",
+        )
+    backend = value.setdefault("backend", {})
+    repos = value.setdefault("repos", {})
+    if not isinstance(backend, dict) or not isinstance(repos, dict):
+        raise TasksError(
+            f"cannot read {path}: backend and repos must be tables",
+            failure_class="configuration",
+            recovery=f"Correct {path}, then retry the tasks command.",
+        )
+    backend.setdefault("provider", "local")
     return value
 
 
@@ -87,7 +108,9 @@ def backend_executable(provider: str) -> Path:
             return candidate
     raise TasksError(
         f"no backend named {provider!r}: expected {bundled} or {name} on PATH "
-        f"(available: {', '.join(available_backends()) or 'none'})"
+        f"(available: {', '.join(available_backends()) or 'none'})",
+        failure_class="configuration",
+        recovery="Choose an available backend in the tasks config, then retry.",
     )
 
 
@@ -123,6 +146,8 @@ def call(config: dict[str, Any], operation: str, **arguments: Any) -> Any:
         )
     except subprocess.TimeoutExpired as error:
         raise TasksError(f"backend {provider} timed out on {operation}") from error
+    except OSError as error:
+        raise TasksError(f"cannot launch backend {provider} for {operation}: {error}") from error
     if completed.returncode != 0:
         detail = completed.stderr.strip() or completed.stdout.strip() or "no detail"
         raise TasksError(f"backend {provider} failed on {operation}: {detail}")
@@ -144,7 +169,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.handler(args) or 0
     except TasksError as error:
-        print(f"tasks: {error}", file=sys.stderr)
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "ok": False,
+                "error": {
+                    "class": error.failure_class,
+                    "message": str(error),
+                    "recovery": error.recovery,
+                },
+            }, indent=2, sort_keys=True))
+        else:
+            print(f"tasks: {error}", file=sys.stderr)
+            print(f"Recovery: {error.recovery}", file=sys.stderr)
         return 1
 
 
@@ -217,6 +253,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("backends", parents=[common], help="backends this install can use")
     p.set_defaults(handler=cmd_backends)
+
+    p = sub.add_parser("doctor", parents=[common], help="diagnose configuration and backend access")
+    p.set_defaults(handler=cmd_doctor)
     return parser
 
 
@@ -259,15 +298,19 @@ def cmd_list(args: argparse.Namespace) -> int:
     every = call(config, "list", repo=repo, state=args.state, stages=[], labels=args.label, search=args.search)
     tasks = [task for task in every if not stages or task.get("stage", "filed") in stages]
     text = "\n".join(_line(task) for task in tasks)
+    counts = {stage: sum(1 for task in every if task.get("stage", "filed") == stage) for stage in STAGES}
     if stages == list(WORKABLE):
         # The default view hides the backlog; say how much is hidden so it
         # is discoverable without a flag the operator has to remember.
         hidden = [task for task in every if task.get("stage", "filed") not in WORKABLE]
-        counts = {stage: sum(1 for task in hidden if task.get("stage", "filed") == stage) for stage in STAGES if stage not in WORKABLE}
         text = text or "No tasks ready or doing."
         if hidden:
-            text += "\nAlso open: " + ", ".join(f"{count} {stage}" for stage, count in counts.items() if count)
-            text += "  (tasks list --stage " + "|".join(stage for stage, count in counts.items() if count) + ")"
+            hidden_counts = {stage: counts[stage] for stage in STAGES if stage not in WORKABLE}
+            text += "\nAlso open: " + ", ".join(f"{count} {stage}" for stage, count in hidden_counts.items() if count)
+            text += "  (tasks list --stage " + "|".join(stage for stage, count in hidden_counts.items() if count) + ")"
+    if not args.json:
+        lifecycle = "  ".join(f"{stage} {counts[stage]}" for stage in STAGES)
+        text = (text or "No tasks.") + f"\nLifecycle: {lifecycle}"
     _emit(args, tasks, text or "No tasks.")
     return 0
 
@@ -283,13 +326,26 @@ def cmd_add(args: argparse.Namespace) -> int:
     config = load_config()
     repo = current_repo(config, args.repo)
     labels = list(dict.fromkeys(args.label))
-    existing = call(config, "list", repo=repo, state="open", stages=[], labels=[], search=args.title)
+    existing = call(config, "list", repo=repo, state="open", stages=[], labels=[], search="")
     duplicate = next((task for task in existing if task["title"].strip().casefold() == args.title.strip().casefold()), None)
     if duplicate:
-        _emit(args, duplicate, f"Already filed: {_line(duplicate)}")
+        result = dict(duplicate, already_exists=True, near_duplicates=[])
+        _emit(args, result, f"Already filed: {_line(duplicate)}")
         return 0
+    wanted = " ".join(args.title.casefold().split())
+    near = [
+        task for task in existing
+        if SequenceMatcher(None, wanted, " ".join(task["title"].casefold().split())).ratio() >= 0.72
+    ][:3]
     task = call(config, "create", repo=repo, title=args.title, body=args.body, labels=labels, stage="filed")
-    _emit(args, task, f"Filed: {_line(task)}")
+    result = dict(task, already_exists=False, near_duplicates=[
+        {"id": item["id"], "title": item["title"], "stage": item.get("stage", "filed")}
+        for item in near
+    ])
+    text = f"Filed: {_line(task)}"
+    if near:
+        text += "\nPossible duplicate: " + "; ".join(f"{item['id']} {item['title']}" for item in near)
+    _emit(args, result, text)
     return 0
 
 
@@ -361,6 +417,37 @@ def cmd_backends(args: argparse.Namespace) -> int:
     _emit(args, {"available": names, "configured": current}, "\n".join(
         f"{name}{'  (configured)' if name == current else ''}" for name in names
     ) or "No backends found.")
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    config = load_config()
+    provider = config["backend"]["provider"]
+    executable = backend_executable(provider)
+    repo = current_repo(config, args.repo)
+    backend = call(config, "doctor", repo=repo)
+    if not isinstance(backend, dict):
+        raise TasksError(f"backend {provider} returned an invalid doctor result")
+    result = {
+        "ok": True,
+        "config": {"path": str(config_path()), "exists": config_path().exists()},
+        "backend": {
+            "provider": provider,
+            "executable": str(executable),
+            "reachable": bool(backend.get("reachable")),
+            "authenticated": bool(backend.get("authenticated")),
+            "detail": backend.get("detail", ""),
+        },
+        "repository": {"name": repo, "label": f"repo:{repo}"},
+        "next_action": "No action needed; tasks is ready.",
+    }
+    text = (
+        f"Tasks ready: {provider} ({executable})\n"
+        f"Config: {result['config']['path']} ({'present' if result['config']['exists'] else 'defaults'})\n"
+        f"Repository: {repo}  label: repo:{repo}\n"
+        f"Next: {result['next_action']}"
+    )
+    _emit(args, result, text)
     return 0
 
 
