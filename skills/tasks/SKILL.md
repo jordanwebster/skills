@@ -73,5 +73,6 @@ under `backends/` beside this file or anywhere on `PATH`. It receives the
 operation as its argument and one JSON request on stdin, and prints one
 JSON result — a task, a list of tasks, or `{"error": …}`. The bundled
 `local` backend is the reference implementation of the protocol; `linear`
-speaks Linear's GraphQL API with a key from the environment. Adding a
+speaks Linear's GraphQL API with a key from the environment or from a
+command the config names (a keychain lookup, say). Adding a
 tracker means adding one such executable.

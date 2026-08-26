@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Linear task backend over the public GraphQL API.
 
-Needs an API key in the environment variable the config names
-(`api_key_env`, default LINEAR_API_KEY) and a team key (`team`, else the
-sole team the key can see). Labels are created on first use. Speaks the
+Needs an API key — from the environment variable the config names
+(`api_key_env`, default LINEAR_API_KEY) or from `api_key_command`, a
+shell command that prints it — and a team key (`team`, else the sole team
+the key can see). Labels are created on first use. Speaks the
 same stdin/stdout JSON protocol as every tasks backend.
 """
 
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -33,8 +35,20 @@ class Linear:
     def __init__(self, config: dict):
         key_name = config.get("api_key_env", "LINEAR_API_KEY")
         self.key = os.environ.get(key_name)
+        command = config.get("api_key_command")
+        if not self.key and command:
+            # A command that prints the key (a keychain lookup, a password
+            # manager) keeps it out of every process's environment.
+            try:
+                self.key = subprocess.run(
+                    command, shell=True, capture_output=True, text=True, timeout=30, check=True
+                ).stdout.strip()
+            except (OSError, subprocess.SubprocessError) as error:
+                raise LinearError(f"api_key_command failed: {error}") from error
         if not self.key:
-            raise LinearError(f"set {key_name} to a Linear API key")
+            raise LinearError(
+                f"no Linear API key: set {key_name}, or api_key_command in the tasks config"
+            )
         self.team_key = config.get("team")
         self._team: dict | None = None
         self._labels: dict[str, str] | None = None

@@ -7,7 +7,8 @@
 provider = "local"            # or "linear"; `tasks backends` lists what is installed
 # path = "~/.local/state/tasks/tasks.json"   # local: where the file lives
 # team = "ENG"                # linear: team key (required when the key sees several)
-# api_key_env = "LINEAR_API_KEY"             # linear: environment variable holding the key
+# api_key_env = "LINEAR_API_KEY"             # linear: environment variable holding the key, or
+# api_key_command = "security find-generic-password -w -s linear-api-key"   # a command that prints it
 
 # One entry per portfolio repository. The description is what lets an
 # agent assign a task to the right repository instead of guessing from the
