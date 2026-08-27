@@ -58,6 +58,33 @@ class StateTests(unittest.TestCase):
         self.assertIn("Operator answer: do Y", task["notes"])
         self.assertEqual(self.flight.open_escalations(), [])
 
+    def test_pending_decision_is_not_an_operator_question_and_can_resolve_internally(self) -> None:
+        task = self.flight.add_task("a", chunk=1)
+        decision = self.flight.add_escalation(task["id"], "repair dependencies", pending_triage=True)
+        self.assertEqual(task["status"], "blocked")
+        self.assertEqual(self.flight.open_escalations(), [])
+        self.assertEqual(self.flight.pending_triage(), [decision])
+        self.flight.resolve_escalation(decision["id"], "dependency order repaired")
+        self.assertEqual(task["status"], "todo")
+        self.assertIn("Internal decision: dependency order repaired", task["notes"])
+        self.assertEqual(self.flight.pending_triage(), [])
+
+    def test_pending_decision_can_be_promoted_before_operator_answer(self) -> None:
+        task = self.flight.add_task("a", chunk=1)
+        decision = self.flight.add_escalation(task["id"], "scope is unclear", pending_triage=True)
+        self.flight.promote_escalation(decision["id"], "Choose whether to expand scope")
+        self.assertEqual(self.flight.open_escalations(), [decision])
+        self.flight.answer_escalation(decision["id"], "do not expand")
+        self.assertEqual(task["status"], "todo")
+        self.assertEqual(decision["state"], "resolved")
+
+    def test_legacy_unanswered_escalation_remains_an_operator_question(self) -> None:
+        task = self.flight.add_task("a", chunk=1)
+        decision = self.flight.add_escalation(task["id"], "legacy question")
+        decision.pop("state")
+        self.assertEqual(self.flight.open_escalations(), [decision])
+        self.assertEqual(self.flight.pending_triage(), [])
+
     def test_adding_a_task_reopens_a_done_chunk(self) -> None:
         chunk = self.flight.chunk(2)
         chunk["status"] = "done"
@@ -69,6 +96,13 @@ class StateTests(unittest.TestCase):
     def test_unknown_dependency_is_rejected(self) -> None:
         with self.assertRaises(StateError):
             self.flight.add_task("a", chunk=1, depends_on=[99])
+
+    def test_dependency_edits_cannot_create_a_cycle(self) -> None:
+        first = self.flight.add_task("a", chunk=1)
+        second = self.flight.add_task("b", chunk=1, depends_on=[first["id"]])
+        with self.assertRaisesRegex(StateError, "acyclic"):
+            self.flight.set_dependencies(first["id"], [second["id"]])
+        self.assertEqual(first["depends_on"], [])
 
     def test_find_walks_up_from_a_subdirectory(self) -> None:
         self.flight.save()

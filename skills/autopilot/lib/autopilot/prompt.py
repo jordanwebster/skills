@@ -30,6 +30,7 @@ ROLE_PROMPTS = {
     "closer": "closer.md",
     "planner": "planner.md",
     "replan": "replan.md",
+    "triage": "triage.md",
 }
 
 
@@ -224,9 +225,46 @@ def replan_prompt(flight: Flight, task: dict[str, Any], *, reason: str) -> str:
         f"autopilot task edit {task['id']} --title \"…\" --done-when \"…\" [--check CMD] [--role R]",
         f"autopilot task reset {task['id']}              clear attempts after re-briefing",
         f"autopilot task note {task['id']} \"text\"",
-        "autopilot task add \"title\" --done-when \"…\" --chunk N [--after ID,...] [--check CMD] [--role R]",
+        "autopilot task add \"title\" --done-when \"…\" --chunk N [--after ID,...] [--check CMD]",
         f"autopilot task park {task['id']} \"reason\"",
         f"autopilot escalate {task['id']} \"blocked on X; I would do Y; blast radius if Y is wrong is Z\"",
+        "```",
+        "",
+    ]
+    return "\n".join(parts)
+
+
+def triage_prompt(flight: Flight, decision: dict[str, Any]) -> str:
+    parts = [header(flight, "planner"), role_prompt("triage"), ""]
+    parts += [
+        "## Decision candidate",
+        "",
+        f"Decision {decision['id']}: {decision['text']}",
+        "",
+    ]
+    if decision.get("task") is not None:
+        parts += ["## Blocked task", "", format_task(flight, flight.task(decision["task"])), ""]
+    parts += ["## Current task graph", ""]
+    for task in flight.tasks:
+        after = ",".join(str(item) for item in task["depends_on"]) or "none"
+        parts.append(
+            f"- Task {task['id']} [{task['status']}] chunk {task['chunk']} after {after}: {task['title']}"
+        )
+    parts += [
+        "",
+        "## Flight notes",
+        "",
+        flight.notes().strip() or "(none yet)",
+        "",
+        "## Commands",
+        "",
+        "```",
+        "autopilot task show <id>",
+        "autopilot task edit <id> --title \"…\" --done-when \"…\" [--check CMD] [--after ID,...]",
+        "autopilot task add \"title\" --done-when \"…\" --chunk N [--after ID,...] [--check CMD]",
+        "autopilot task park <id> \"reason\"",
+        f"autopilot triage {decision['id']} --resolve \"decision and rationale\"",
+        f"autopilot triage {decision['id']} --operator \"question and why only the operator can decide\"",
         "```",
         "",
     ]

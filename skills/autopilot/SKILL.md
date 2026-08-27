@@ -94,6 +94,14 @@ current work, driver health, genuine questions, and its one next action.
   no attempt or iteration. Transient infrastructure failures use bounded
   pause-and-retry and consume no work budget. Work failures consume attempts.
 - A retry-capped planner sees whether prior attempts advanced the branch.
+- A worker's `autopilot escalate` request first receives one bounded internal
+  triage through the approved planner binding. Reversible, in-scope changes to
+  implementation details, task dependencies, checks, or capture mechanics are
+  resolved and recorded without interrupting the operator. Triage promotes
+  only changes to accepted promises or material design, new authority or
+  external consequences, meaningful spend or staffing changes, destructive
+  acts, and genuinely ambiguous product trade-offs. An inconclusive pass is
+  promoted rather than repeated.
 - Evidence coverage is many-to-many. Capture may happen during implementation,
   verification, QA, or closing; no dedicated capture task is required.
 - Every completed claim names accepted demonstrations, current artifacts, a
@@ -101,8 +109,10 @@ current work, driver health, genuine questions, and its one next action.
   explicit gap or complete coverage.
 
 Workers use `autopilot task list | show | start | done | note | add | edit |
-park | unpark | reset`. Genuine operator decisions use `autopilot escalate`;
-record the answer with `autopilot answer`.
+park | unpark | reset`. They request decision triage with `autopilot
+escalate`; the dispatched planner alone resolves or promotes it with
+`autopilot triage`. Only promoted questions appear to the operator, whose
+answer is recorded with `autopilot answer`.
 
 At landing, `autopilot status --open` opens Handoff's decision page. After the
 operator has read it, `autopilot land` moves the final proof bundle, evidence,

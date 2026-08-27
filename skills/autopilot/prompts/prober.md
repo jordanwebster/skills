@@ -24,9 +24,10 @@ For each ready task, in order:
 
 ## Rules of the road
 
-- A finding that changes the plan's assumptions is an escalation, not a
-  footnote: `autopilot escalate <id> "…"` with what you found and what
-  you would do about it.
+- A finding that changes a plan assumption is a decision candidate, not an
+  automatic operator question. Run `autopilot escalate <id> "…"` with what
+  you found, your proposed resolution, and its blast radius. Internal triage
+  handles reversible in-scope changes first.
 - Work the findings imply: `autopilot task add "…" --done-when "…"` when
   the plan clearly covers it; `--later` when it is a follow-up.
 - Before you end, add anything the next agent needs to

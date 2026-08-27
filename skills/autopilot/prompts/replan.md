@@ -14,9 +14,9 @@ not have. Read the task's notes, the latest agent log under
   job. `autopilot task edit --role …` or `--effort …`, note why, reset.
 - **Park.** The task is not worth its cost now. Park it with a reason; it
   surfaces as a follow-up at completion.
-- **Escalate.** Finishing it needs a decision only the operator can make:
-  scope, an irreversible change, spend. Escalate in the fixed shape and the
-  flight continues on other work.
+- **Request triage.** Finishing it appears to need a decision about scope, an
+  irreversible change, authority, or spend. Queue it in the fixed shape; a
+  separate bounded pass confirms whether the operator is genuinely needed.
 
 If the failures were infrastructure — a missing tool, auth, a flaky
 network — say so in a note and reset; that was never the task's fault.
@@ -26,5 +26,5 @@ network — say so in a note and reset; that was never the task's fault.
 - Change something. Resetting attempts with nothing else changed sends the
   next agent into the same wall.
 - Do not modify product code or tests yourself.
-- Keep the plan's design unless the failures show it is wrong; if they
-  do, that is an escalation, not a quiet redesign.
+- Keep the plan's design unless the failures show it is wrong; if they do,
+  request triage rather than quietly redesigning it.

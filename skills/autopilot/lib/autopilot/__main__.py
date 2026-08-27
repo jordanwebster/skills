@@ -179,10 +179,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("id", type=int)
     p.set_defaults(handler=cmd_task_reset)
 
-    p = sub.add_parser("escalate", help="ask the operator; the flight continues on other work")
-    p.add_argument("id", nargs="?", help="task id the question blocks (omit for a flight-level question)")
+    p = sub.add_parser("escalate", help="request one internal decision triage; the operator is asked only if needed")
+    p.add_argument("id", nargs="?", help="task id the decision blocks (omit for a flight-level decision)")
     p.add_argument("text", help="blocked on X; I would do Y; blast radius if Y is wrong is Z")
     p.set_defaults(handler=cmd_escalate)
+
+    p = sub.add_parser("triage", help="resolve or promote a pending decision (dispatched triage only)")
+    p.add_argument("id", type=int)
+    outcome = p.add_mutually_exclusive_group(required=True)
+    outcome.add_argument("--resolve", help="in-scope internal decision and rationale")
+    outcome.add_argument("--operator", help="question and why only operator judgment can settle it")
+    p.set_defaults(handler=cmd_triage)
 
     p = sub.add_parser("answer", help="answer an escalation and resume the flight")
     p.add_argument("id", type=int)
@@ -238,6 +245,11 @@ def _role_from_env() -> str | None:
 
 def _chunk_from_env() -> int | None:
     value = os.environ.get("AUTOPILOT_CHUNK")
+    return int(value) if value and value.isdigit() else None
+
+
+def _triage_from_env() -> int | None:
+    value = os.environ.get("AUTOPILOT_TRIAGE_ID")
     return int(value) if value and value.isdigit() else None
 
 
@@ -443,7 +455,11 @@ def cmd_status(args: argparse.Namespace) -> int:
 def _status_payload(flight: Flight, driver: Any) -> dict[str, Any]:
     active = [task for task in flight.tasks if task["status"] == "doing"]
     questions = [
-        {"id": item["id"], "question": item["text"], "task_id": item["task"]}
+        {
+            "id": item["id"],
+            "question": item.get("operator_question") or item["text"],
+            "task_id": item["task"],
+        }
         for item in flight.open_escalations()
     ]
     failure = flight.data.get("failure")
@@ -498,6 +514,10 @@ def _status_payload(flight: Flight, driver: Any) -> dict[str, Any]:
         "diagnostics": {
             "iteration": flight.data["iteration"],
             "iteration_limit": flight.config["max_iterations"],
+            "pending_triage": [
+                {"id": item["id"], "finding": item["text"], "task_id": item["task"]}
+                for item in flight.pending_triage()
+            ],
             "dispatches": flight.data.get("dispatches", []),
             "recent_events": flight.recent_events(20),
         },
@@ -627,6 +647,8 @@ def cmd_task_note(args: argparse.Namespace) -> int:
 
 def cmd_task_add(args: argparse.Namespace) -> int:
     flight = _flight()
+    if _triage_from_env() is not None and (args.role is not None or args.effort is not None):
+        raise StateError("internal triage cannot add unapproved semantic staffing; promote that decision to the operator")
     chunk = args.chunk or _chunk_from_env() or (flight.chunks[-1]["id"] if flight.chunks else None)
     if chunk is None:
         raise StateError("no chunk to file the task into; seed the flight first")
@@ -651,15 +673,14 @@ def cmd_task_add(args: argparse.Namespace) -> int:
 def cmd_task_edit(args: argparse.Namespace) -> int:
     flight = _flight()
     task = flight.task(args.id)
+    if _triage_from_env() is not None and (args.role is not None or args.effort is not None):
+        raise StateError("internal triage cannot change approved semantic staffing; promote that decision to the operator")
     for field in ("title", "done_when", "check", "role", "effort"):
         value = getattr(args, field)
         if value is not None:
             task[field] = value
     if args.after is not None:
-        dependencies = _ids(args.after)
-        for dependency in dependencies:
-            flight.task(dependency)
-        task["depends_on"] = sorted(set(dependencies) - {task["id"]})
+        flight.set_dependencies(task["id"], _ids(args.after))
     flight.save()
     flight.event(f"task {task['id']} re-briefed by {_role_from_env() or 'operator'}")
     return 0
@@ -708,10 +729,27 @@ def cmd_escalate(args: argparse.Namespace) -> int:
             flight.task(task_id)
         else:
             args.text = f"{args.id} {args.text}"
-    escalation = flight.add_escalation(task_id, args.text)
+    escalation = flight.add_escalation(task_id, args.text, pending_triage=True)
     flight.save()
-    flight.event(f"escalation #{escalation['id']} raised by {_role_from_env() or 'operator'}: {args.text[:80]}")
-    print(f"Escalation #{escalation['id']} recorded; the flight continues on other work.")
+    flight.event(f"decision #{escalation['id']} queued for triage by {_role_from_env() or 'operator'}: {args.text[:80]}")
+    print(f"Decision #{escalation['id']} queued for internal triage; the operator is asked only if needed.")
+    return 0
+
+
+def cmd_triage(args: argparse.Namespace) -> int:
+    flight = _flight()
+    expected = _triage_from_env()
+    if _role_from_env() != "planner" or expected != args.id:
+        raise StateError("autopilot triage is available only to the dispatched planner for this decision")
+    if args.resolve is not None:
+        escalation = flight.resolve_escalation(args.id, args.resolve)
+        action = "resolved internally"
+    else:
+        escalation = flight.promote_escalation(args.id, args.operator)
+        action = "promoted to the operator"
+    flight.save()
+    flight.event(f"decision #{escalation['id']} {action}")
+    print(f"Decision #{escalation['id']} {action}.")
     return 0
 
 

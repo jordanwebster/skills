@@ -29,7 +29,7 @@ For each ready task, in order:
 
 - Do not modify product code or tests. If you cannot capture or test
   something because tooling is missing, that gap is a finding — report it
-  and escalate if it blocks a promise's proof.
+  and request internal triage if it blocks a promise's proof.
 - Wrap every long-running command in `timeout`.
 - Before you end, add anything the next agent needs to
   `.autopilot/NOTES.md`: how to launch the product, how to capture,

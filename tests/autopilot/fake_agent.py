@@ -6,7 +6,8 @@ failure modes the loop must handle:
 
   [fail-once]   leave the task in progress on its first attempt
   [badcheck]    mark done with output that fails the task's check
-  [escalate]    raise an escalation instead of working, once
+  [escalate]    request decision triage instead of working, once
+  [dependency]  request triage that repairs an inverted dependency
   [stall]       exit without touching anything
 
 """
@@ -48,10 +49,15 @@ def work() -> None:
         title = task["title"]
         if "[stall]" in title:
             return
-        if "[escalate]" in title and not any(
+        if ("[escalate]" in title or "[dependency]" in title) and not any(
             item["task"] == task["id"] for item in flight()["escalations"]
         ):
-            autopilot("escalate", str(task["id"]), "blocked on the marker; I would remove it; blast radius none")
+            finding = (
+                "the next task must run first; I would reverse their dependency; blast radius is scheduling only"
+                if "[dependency]" in title
+                else "blocked on the marker; I would remove it; blast radius none"
+            )
+            autopilot("escalate", str(task["id"]), finding)
             continue
         autopilot("task", "start", str(task["id"]))
         if "[fail-once]" in title and task["attempts"] == 0:
@@ -132,6 +138,36 @@ def replan(prompt: str) -> None:
     autopilot("task", "reset", task_id)
 
 
+def triage() -> None:
+    decision_id = os.environ["AUTOPILOT_TRIAGE_ID"]
+    state = flight()
+    decision = next(item for item in state["escalations"] if item["id"] == int(decision_id))
+    if os.environ.get("FAKE_TRIAGE_STALL"):
+        return
+    if os.environ.get("FAKE_TRIAGE_OPERATOR") or decision["task"] is None:
+        autopilot(
+            "triage",
+            decision_id,
+            "--operator",
+            "Choose whether to change the accepted promise; only the operator can authorize that scope.",
+        )
+        return
+    task = next(item for item in state["tasks"] if item["id"] == decision["task"])
+    if "[dependency]" in task["title"]:
+        prerequisite = next(item for item in state["tasks"] if task["id"] in item["depends_on"])
+        remaining = [item for item in prerequisite["depends_on"] if item != task["id"]]
+        autopilot("task", "edit", str(prerequisite["id"]), "--after", ",".join(map(str, remaining)))
+        autopilot("task", "edit", str(task["id"]), "--after", str(prerequisite["id"]))
+    title = re.sub(r"\[(?:escalate|dependency)\]", "", task["title"]).strip()
+    autopilot("task", "edit", str(task["id"]), "--title", title)
+    autopilot(
+        "triage",
+        decision_id,
+        "--resolve",
+        "Applied the reversible in-scope task-graph repair; accepted behavior and staffing are unchanged.",
+    )
+
+
 def main() -> int:
     prompt = sys.stdin.read()
     if "connectivity check" in prompt:
@@ -149,6 +185,8 @@ def main() -> int:
         review()
     elif ROLE == "closer":
         close()
+    elif ROLE == "planner" and os.environ.get("AUTOPILOT_TRIAGE_ID"):
+        triage()
     elif ROLE == "planner":
         replan(prompt)
     else:

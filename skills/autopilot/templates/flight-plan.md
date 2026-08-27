@@ -82,7 +82,8 @@ WHICH ROLE DOES WHAT AND WHY. Roles resolve to models through the operator's
 roster; the page derives the actual model, effort, and material constraints.
 Explain the expected dispatch range recorded in `config.expected_iterations`
 and anything unusually expensive. The range is an honest planner estimate;
-`max_iterations` is the hard ceiling.
+include plausible internal decision-triage calls without padding for unlikely
+operator questions. `max_iterations` is the hard ceiling.
 
 ## What you will be asked
 

@@ -183,19 +183,55 @@ Final all-ok: CONFIRMED
         self.assertIn("prober work", listing.stdout)
         self.assertNotIn("build", listing.stdout)
 
-    def test_escalate_and_answer(self) -> None:
+    def test_decision_triage_resolves_or_promotes_before_operator_answer(self) -> None:
         flight = self.seed(toy_plan([task(1, "first")]))
         raised = self.cli("escalate", "1", "blocked on X; I would do Y; blast radius Z")
-        self.assertIn("Escalation #1", raised.stdout)
+        self.assertIn("Decision #1 queued for internal triage", raised.stdout)
         flight.load()
         self.assertEqual(flight.task(1)["status"], "blocked")
+        self.assertEqual(len(flight.pending_triage()), 1)
+        status = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual(status["questions"], [])
+        self.assertEqual(status["diagnostics"]["pending_triage"][0]["id"], 1)
         flight_level = self.cli("escalate", "should we ship?")
-        self.assertIn("Escalation #2", flight_level.stdout)
-        answered = self.cli("answer", "1", "do Y", "--no-start")
+        self.assertIn("Decision #2 queued for internal triage", flight_level.stdout)
+
+        unauthorized = self.cli("triage", "1", "--resolve", "do Y")
+        self.assertEqual(unauthorized.returncode, 1)
+        self.assertIn("dispatched planner", unauthorized.stderr)
+        triage_one = dict(self.env, AUTOPILOT_ROLE="planner", AUTOPILOT_TRIAGE_ID="1")
+        staffing_edit = self.cli("task", "edit", "1", "--role", "reviewer", env=triage_one)
+        self.assertEqual(staffing_edit.returncode, 1)
+        self.assertIn("approved semantic staffing", staffing_edit.stderr)
+        staffing_add = self.cli(
+            "task",
+            "add",
+            "specialist work",
+            "--done-when",
+            "done",
+            "--role",
+            "reviewer",
+            env=triage_one,
+        )
+        self.assertEqual(staffing_add.returncode, 1)
+        self.assertIn("unapproved semantic staffing", staffing_add.stderr)
+        resolved = self.cli("triage", "1", "--resolve", "do Y", env=triage_one)
+        self.assertEqual(resolved.returncode, 0, resolved.stderr)
+        triage_two = dict(self.env, AUTOPILOT_ROLE="planner", AUTOPILOT_TRIAGE_ID="2")
+        promoted = self.cli(
+            "triage",
+            "2",
+            "--operator",
+            "Choose whether to ship; this changes the accepted release decision.",
+            env=triage_two,
+        )
+        self.assertEqual(promoted.returncode, 0, promoted.stderr)
+        answered = self.cli("answer", "2", "do not ship", "--no-start")
         self.assertEqual(answered.returncode, 0, answered.stderr)
         flight.load()
         self.assertEqual(flight.task(1)["status"], "todo")
-        self.assertEqual(len(flight.open_escalations()), 1)
+        self.assertEqual(flight.open_escalations(), [])
+        self.assertIn("Internal decision: do Y", flight.task(1)["notes"])
 
     def test_stop_kills_a_running_driver(self) -> None:
         flight = self.seed(toy_plan([task(1, "first")]))

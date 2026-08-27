@@ -55,21 +55,66 @@ class LoopTests(FlightCase):
         self.assertIn("planner", events)
         self.assertIn("check failed", events)
 
-    def test_escalation_pauses_then_answer_resumes(self) -> None:
+    def test_reversible_worker_decision_is_triaged_and_resolved_internally(self) -> None:
         plan = toy_plan([task(1, "[escalate] first"), task(2, "second")])
         flight = self.seed(plan)
-        self.assertEqual(self.drive(flight), "escalated")
+        self.assertEqual(self.drive(flight), "landed")
+        flight.load()
+        decision = flight.escalation(1)
+        self.assertEqual(decision["state"], "resolved")
+        self.assertIsNone(decision["answer"])
+        self.assertEqual(flight.open_escalations(), [])
+        self.assertIn("Internal decision", flight.task(1)["notes"])
+        self.assertTrue(all(task["status"] == "done" for task in flight.tasks))
+        self.assertIn("planner", [item["role"] for item in flight.data["dispatches"]])
+
+    def test_internal_triage_repairs_an_inverted_dependency(self) -> None:
+        plan = toy_plan([task(1, "[dependency] capture"), task(2, "companion", depends_on=[1])])
+        flight = self.seed(plan)
+        self.assertEqual(self.drive(flight), "landed")
+        flight.load()
+        self.assertEqual(flight.task(1)["depends_on"], [2])
+        self.assertEqual(flight.task(2)["depends_on"], [])
+        self.assertEqual(flight.escalation(1)["state"], "resolved")
+        self.assertTrue(all(task["status"] == "done" for task in flight.tasks))
+
+    def test_triage_promotes_a_genuine_operator_decision_then_answer_resumes(self) -> None:
+        plan = toy_plan([task(1, "[escalate] first"), task(2, "second")])
+        flight = self.seed(plan)
+        self.assertEqual(self.drive(flight, FAKE_TRIAGE_OPERATOR="1"), "escalated")
         flight.load()
         self.assertEqual(flight.task(1)["status"], "blocked")
-        self.assertEqual(flight.task(2)["status"], "done", "independent work continues past an escalation")
+        self.assertEqual(flight.task(2)["status"], "done", "independent work continues after promotion")
         escalation = flight.open_escalations()[0]
-        self.assertEqual(escalation["task"], 1)
-        flight.answer_escalation(escalation["id"], "remove the marker")
-        flight.task(1)["title"] = "first"
+        self.assertEqual(escalation["state"], "operator")
+        self.assertIn("only the operator", escalation["operator_question"])
+        flight.answer_escalation(escalation["id"], "keep the accepted promise")
         flight.save()
         self.assertEqual(self.drive(flight), "landed")
         flight.load()
         self.assertIn("Operator answer", flight.task(1)["notes"])
+
+    def test_inconclusive_triage_is_promoted_after_one_pass(self) -> None:
+        flight = self.seed(toy_plan([task(1, "[escalate] first")]))
+        self.assertEqual(self.drive(flight, FAKE_TRIAGE_STALL="1"), "escalated")
+        flight.load()
+        escalation = flight.open_escalations()[0]
+        self.assertEqual(escalation["state"], "operator")
+        self.assertIn("one bounded pass", escalation["operator_question"])
+        planner_dispatches = [item for item in flight.data["dispatches"] if item["role"] == "planner"]
+        self.assertEqual(len(planner_dispatches), 1)
+
+    def test_driver_routes_a_no_ready_deadlock_through_triage(self) -> None:
+        flight = self.seed(toy_plan([task(1, "parked prerequisite"), task(2, "waiting", depends_on=[1])]))
+        flight.set_status(flight.task(1), "parked")
+        flight.save()
+        self.assertEqual(self.drive(flight), "escalated")
+        flight.load()
+        escalation = flight.open_escalations()[0]
+        self.assertIsNone(escalation["task"])
+        self.assertIn("only the operator", escalation["operator_question"])
+        planner_dispatches = [item for item in flight.data["dispatches"] if item["role"] == "planner"]
+        self.assertEqual(len(planner_dispatches), 1)
 
     def test_review_and_closer_can_file_work(self) -> None:
         plan = toy_plan([task(1, "first")], config={"max_iterations": 20})

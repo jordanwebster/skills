@@ -11,9 +11,10 @@ boundaries without making the operator manage the machinery.
 - **autopilot** — an unattended loop of fresh agents for work too large
   for one sitting: a flight plan the operator approves in a browser, a
   deterministic preflight that checks every role and tool locally, a task list agents
-  pull from and add to, one review per chunk, and a final acceptance with
-  captured proof against the requirements. Roles resolve to models through
-  the delegate roster.
+  pull from and add to, bounded internal triage before an operator is
+  interrupted, one review per chunk, and a final acceptance with captured
+  proof against the requirements. Roles resolve to models through the delegate
+  roster.
 - **handoff** — proportionate proof where a user sees the result. Easily judged
   behavior gets compact proof without an automatic review; risky, long,
   architectural, inbound, or difficult work gets one decision page and one

@@ -81,6 +81,21 @@ class Driver:
             if self.supervisor is not None and self.supervisor.drain_requested():
                 self._end("stopped", "drained after the current iteration")
             limit = self.max_iterations or flight.config["max_iterations"]
+            pending = flight.pending_triage()
+            if pending:
+                if flight.data["iteration"] >= limit:
+                    decision = pending[0]
+                    flight.promote_escalation(
+                        decision["id"],
+                        "The flight reached its dispatch ceiling before internal triage could assess this decision: "
+                        + decision["text"],
+                    )
+                    flight.event(f"decision #{decision['id']} promoted because the dispatch ceiling was reached")
+                    flight.save()
+                    self._end("escalated", "internal decision triage needs operator judgment")
+                else:
+                    self._triage(pending[0])
+                    continue
             if flight.data["iteration"] >= limit:
                 self._end(
                     "exhausted",
@@ -114,12 +129,15 @@ class Driver:
             if all(item["status"] == "done" for item in flight.chunks):
                 self._close_flight()
                 continue
-            flight.add_escalation(
+            decision = flight.add_escalation(
                 None,
                 "No task is ready and no chunk can complete. Something depends on a parked "
-                "or blocked task; decide whether to unpark, answer, or land as-is.",
+                "or blocked task. I would repair the task graph when that stays within the approved plan; "
+                "the blast radius is execution order and scheduling only.",
+                pending_triage=True,
             )
-            self._end("escalated", "no ready work")
+            flight.event(f"decision #{decision['id']} queued after the task graph made no work ready")
+            flight.save()
 
     # -- one iteration -------------------------------------------------------------
 
@@ -185,6 +203,34 @@ class Driver:
                 return
         task["commit"] = gitops.head(flight.root)
         flight.event(f"iteration {iteration}: task {task['id']} done — {task['title']}")
+
+    def _triage(self, decision: dict[str, Any]) -> None:
+        """Give one fresh planner context the chance to settle a flight decision."""
+
+        flight = self.flight
+        outcome = self._dispatch(
+            "planner",
+            prompt.triage_prompt(flight, decision),
+            summary=f"decision {decision['id']} triage",
+            extra_env={"AUTOPILOT_TRIAGE_ID": str(decision["id"])},
+        )
+        flight.load()
+        if outcome.exit_class == dispatch.EXIT_CONFIG:
+            self._config(outcome)
+            return
+        if outcome.exit_class == dispatch.EXIT_INFRA:
+            self._infra(outcome)
+            return
+        self.infra_streak = 0
+        current = flight.escalation(decision["id"])
+        if current.get("state") == "pending_triage":
+            flight.promote_escalation(
+                current["id"],
+                "Internal triage did not safely settle this decision in its one bounded pass: "
+                + current["text"],
+            )
+            flight.event(f"decision #{current['id']} promoted after inconclusive internal triage")
+            flight.save()
 
     def _dispatch(
         self,
@@ -266,12 +312,14 @@ class Driver:
                     )
                     flight.event(f"chunk {chunk['id']}: verification failed; filed a fix task")
                 else:
-                    flight.add_escalation(
+                    decision = flight.add_escalation(
                         None,
                         f"Chunk {chunk['id']} ({chunk['title']}) verification `{chunk['check']}` "
-                        f"still fails after {chunk['fix_rounds']} fix rounds. Last output:\n{output[-800:]}",
+                        f"still fails after {chunk['fix_rounds']} fix rounds. I would reassess the task or "
+                        f"verification boundary without changing accepted behavior. Last output:\n{output[-800:]}",
+                        pending_triage=True,
                     )
-                    flight.event(f"chunk {chunk['id']}: verification keeps failing; escalated")
+                    flight.event(f"decision #{decision['id']} queued after chunk verification kept failing")
                 flight.save()
                 return
         if chunk.get("review") and not chunk.get("reviewed"):
@@ -332,13 +380,15 @@ class Driver:
                     flight.event("whole-flight verification failed; filed a fix task")
                     flight.save()
                     return
-                flight.add_escalation(
+                decision = flight.add_escalation(
                     None,
                     f"Whole-flight verification `{flight.config['check']}` still fails after "
-                    f"{rounds} fix rounds. Last output:\n{output[-800:]}",
+                    f"{rounds} fix rounds. I would reassess the task or verification boundary without "
+                    f"changing accepted behavior. Last output:\n{output[-800:]}",
+                    pending_triage=True,
                 )
+                flight.event(f"decision #{decision['id']} queued after whole-flight verification kept failing")
                 flight.save()
-                self._end("escalated", "whole-flight verification keeps failing")
                 return
         if flight.data["closer_rounds"] >= 2:
             flight.add_escalation(

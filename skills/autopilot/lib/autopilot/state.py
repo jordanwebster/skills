@@ -275,6 +275,37 @@ class Flight:
             raise StateError(f"unknown task status {status}")
         task["status"] = status
 
+    def set_dependencies(self, task_id: int, dependencies: Iterable[int]) -> None:
+        task = self.task(task_id)
+        selected = sorted({int(item) for item in dependencies})
+        for dependency in selected:
+            self.task(dependency)
+        if task_id in selected:
+            raise StateError("a task cannot depend on itself")
+        previous = task["depends_on"]
+        task["depends_on"] = selected
+        if self._dependency_cycle():
+            task["depends_on"] = previous
+            raise StateError("task dependencies must remain acyclic")
+
+    def _dependency_cycle(self) -> bool:
+        visiting: set[int] = set()
+        visited: set[int] = set()
+
+        def visit(task_id: int) -> bool:
+            if task_id in visiting:
+                return True
+            if task_id in visited:
+                return False
+            visiting.add(task_id)
+            if any(visit(dependency) for dependency in self.task(task_id)["depends_on"]):
+                return True
+            visiting.remove(task_id)
+            visited.add(task_id)
+            return False
+
+        return any(visit(task["id"]) for task in self.tasks if task["id"] not in visited)
+
     def note(self, task: dict[str, Any], text: str) -> None:
         text = text.strip()
         if not text:
@@ -282,11 +313,21 @@ class Flight:
         existing = task.get("notes", "").rstrip()
         task["notes"] = f"{existing}\n{text}" if existing else text
 
-    def add_escalation(self, task_id: int | None, text: str) -> dict[str, Any]:
+    def add_escalation(
+        self,
+        task_id: int | None,
+        text: str,
+        *,
+        pending_triage: bool = False,
+    ) -> dict[str, Any]:
         escalation = {
             "id": 1 + max((item["id"] for item in self.escalations), default=0),
             "task": task_id,
             "text": text.strip(),
+            "state": "pending_triage" if pending_triage else "operator",
+            "operator_question": None,
+            "resolution": None,
+            "triaged": None,
             "answer": None,
             "iteration": self.data["iteration"],
             "created": _now(),
@@ -297,10 +338,42 @@ class Flight:
             self.set_status(self.task(task_id), "blocked")
         return escalation
 
+    def resolve_escalation(self, escalation_id: int, resolution: str) -> dict[str, Any]:
+        escalation = self.escalation(escalation_id)
+        if escalation.get("state") != "pending_triage":
+            raise StateError(f"escalation {escalation_id} is not pending internal triage")
+        resolution = resolution.strip()
+        if not resolution:
+            raise StateError("an internal resolution cannot be empty")
+        escalation["state"] = "resolved"
+        escalation["resolution"] = resolution
+        escalation["triaged"] = _now()
+        if escalation["task"] is not None:
+            task = self.task(escalation["task"])
+            if task["status"] == "blocked":
+                self.set_status(task, "todo")
+            self.note(task, f"Internal decision: {resolution}")
+        return escalation
+
+    def promote_escalation(self, escalation_id: int, question: str) -> dict[str, Any]:
+        escalation = self.escalation(escalation_id)
+        if escalation.get("state") != "pending_triage":
+            raise StateError(f"escalation {escalation_id} is not pending internal triage")
+        question = question.strip()
+        if not question:
+            raise StateError("an operator question cannot be empty")
+        escalation["state"] = "operator"
+        escalation["operator_question"] = question
+        escalation["triaged"] = _now()
+        return escalation
+
     def answer_escalation(self, escalation_id: int, answer: str) -> dict[str, Any]:
         escalation = self.escalation(escalation_id)
+        if escalation.get("state", "operator") != "operator" or escalation["answer"] is not None:
+            raise StateError(f"escalation {escalation_id} is not waiting on the operator")
         escalation["answer"] = answer.strip()
         escalation["answered"] = _now()
+        escalation["state"] = "resolved"
         if escalation["task"] is not None:
             task = self.task(escalation["task"])
             if task["status"] == "blocked":
@@ -336,7 +409,14 @@ class Flight:
         return ready[0] if ready else None
 
     def open_escalations(self) -> list[dict[str, Any]]:
-        return [item for item in self.escalations if item["answer"] is None]
+        return [
+            item
+            for item in self.escalations
+            if item.get("state", "operator") == "operator" and item["answer"] is None
+        ]
+
+    def pending_triage(self) -> list[dict[str, Any]]:
+        return [item for item in self.escalations if item.get("state") == "pending_triage"]
 
     def chunk_complete(self, chunk: dict[str, Any]) -> bool:
         """Every task in the chunk is done or parked, and none is waiting."""

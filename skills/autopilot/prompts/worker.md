@@ -31,15 +31,16 @@ commit what is green, and end. A fresh agent continues from your notes.
   has to work around.
 - Do not weaken a test to make it pass. If a test is wrong, fix it and say
   why in the commit message; the chunk review looks for exactly this.
-- Ambiguity you cannot settle from the plan, the requirements, or the code:
-  do not guess. `autopilot escalate <id> "blocked on X; I would do Y; blast
-  radius if Y is wrong is Z"`, then move to the next ready task.
+- Ambiguity you cannot settle from the plan, requirements, or code: request
+  internal decision triage with `autopilot escalate <id> "blocked on X; I
+  would do Y; blast radius if Y is wrong is Z"`, then move on. A fresh
+  planner context decides whether the operator is genuinely needed.
 - Work you notice that is not your task: `autopilot task add "…"
   --done-when "…"` when the plan clearly covers it, `--later` when it is a
   follow-up. Widening what the flight promises is never yours to decide —
   escalate it.
-- A missing tool, a network failure, an auth prompt: not your task's
-  failure. Note it on the task and escalate if it blocks you.
+- A missing tool, network failure, or auth prompt is not your task's failure.
+  Note it and request triage if it blocks you.
 - Wrap every long-running command in `timeout`.
 - Before you end, update `.autopilot/NOTES.md` with what the next agent
   needs: build and test commands that work, how to capture evidence,
