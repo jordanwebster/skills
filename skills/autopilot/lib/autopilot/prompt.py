@@ -8,6 +8,7 @@ context lives in the plan file, which the agent reads itself.
 from __future__ import annotations
 
 from collections.abc import Sequence
+import json
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,8 @@ def header(flight: Flight, role: str) -> str:
     ]
     if flight.requirements_path.exists():
         lines.append("- .autopilot/requirements.md — the operator's confirmed requirements")
+    if flight.acceptance_path.exists():
+        lines.append("- .autopilot/acceptance.json — normalized confirmed demonstrations; copy them exactly")
     lines += [
         "",
         f"The `autopilot` command is at {SCRIPTS_DIR / 'autopilot'} and on your PATH. "
@@ -185,6 +188,20 @@ def closer_prompt(flight: Flight, *, check_result: str | None) -> str:
         parts += ["", "Parked tasks (follow-ups, not built):", ""]
         parts += [f"- Task {task['id']} {task['title']}: {task['notes'].splitlines()[-1] if task['notes'] else ''}" for task in parked]
     parts += ["", "## Flight notes", "", flight.notes().strip() or "(none yet)", ""]
+    if flight.acceptance_path.exists():
+        inspection = json.loads(flight.acceptance_path.read_text(encoding="utf-8"))
+        demonstrations = inspection["acceptance"]["demonstrations"]
+        accepted = [{"id": item["id"], "description": item["description"]} for item in demonstrations]
+        parts += [
+            "## Confirmed demonstrations",
+            "",
+            "Copy this exact set into `accepted_demonstrations`; omitting, adding, or renaming one is rejected before Handoff:",
+            "",
+            "```json",
+            json.dumps(accepted, indent=2),
+            "```",
+            "",
+        ]
     parts.append("Write the reviewed proof bundle to `.autopilot/handoff/proof.json`.")
     parts.append(
         "File each genuine gap with `autopilot task add \"…\" --done-when \"…\" --origin closer` "

@@ -104,6 +104,16 @@ class PlanTests(unittest.TestCase):
         with self.assertRaisesRegex(PlanError, "accepted_reason and limitation"):
             read_plan(self.write(plan_markdown(plan)))
 
+    def test_expected_dispatch_range_must_fit_the_hard_maximum(self) -> None:
+        plan = toy_plan([task(1, "a")], config={"max_iterations": 5})
+        plan["config"]["expected_iterations"] = {"min": 3, "max": 6}
+        with self.assertRaisesRegex(PlanError, "expected_iterations"):
+            read_plan(self.write(plan_markdown(plan)))
+
+        plan["config"]["expected_iterations"] = {"min": 2, "max": 5}
+        parsed = read_plan(self.write(plan_markdown(plan)))
+        self.assertEqual(parsed["config"]["expected_iterations"], {"min": 2, "max": 5})
+
 
 if __name__ == "__main__":
     unittest.main()

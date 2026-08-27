@@ -11,6 +11,8 @@ import shlex
 import subprocess
 from typing import Any
 
+from . import acceptance
+
 
 @dataclass(frozen=True)
 class Result:
@@ -21,7 +23,21 @@ class Result:
     payload: Mapping[str, Any] | None = None
 
 
-def finish(workspace: Path, *, environment: Mapping[str, str] | None = None) -> Result:
+def finish(
+    workspace: Path,
+    *,
+    acceptance_path: Path,
+    environment: Mapping[str, str] | None = None,
+) -> Result:
+    try:
+        acceptance.verify_proof(acceptance_path, workspace)
+    except acceptance.AcceptanceError as error:
+        return Result(
+            False,
+            None,
+            str(error),
+            "Copy every confirmed demonstration exactly from normalized acceptance, then rerun the closer.",
+        )
     selected_environment = dict(os.environ if environment is None else environment)
     invocation = command(selected_environment)
     invocation += ["finish", str(workspace), "--json", "--no-open"]

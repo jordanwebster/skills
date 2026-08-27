@@ -72,12 +72,19 @@ def split_title(text: str, *, default: str) -> tuple[str, str]:
     return default, text
 
 
-def flight_plan(text: str, plan: dict[str, Any], *, title: str, base: Path | None = None) -> str:
+def flight_plan(
+    text: str,
+    plan: dict[str, Any],
+    *,
+    title: str,
+    base: Path | None = None,
+    staffing: list[dict[str, Any]] | None = None,
+) -> str:
     """The plan page: the planner's Markdown with the machine block shown as tables."""
 
     body = _strip_plan_block(text)
     rendered = markdown(body, base=base)
-    tables = plan_tables(plan)
+    tables = plan_tables(plan, staffing=staffing or [])
     if _PLAN_MARKER in rendered:
         rendered = rendered.replace(_PLAN_MARKER, tables, 1)
     else:
@@ -118,43 +125,65 @@ def _strip_plan_block(text: str) -> str:
     return "\n".join(out)
 
 
-def plan_tables(plan: dict[str, Any]) -> str:
+def plan_tables(plan: dict[str, Any], *, staffing: list[dict[str, Any]]) -> str:
     chunks = plan.get("chunks", [])
     tasks = plan.get("tasks", [])
     config = plan.get("config", {})
     by_chunk: dict[Any, list[dict[str, Any]]] = {}
     for task in tasks:
         by_chunk.setdefault(task["chunk"], []).append(task)
-    parts: list[str] = []
+    parts: list[str] = ["<table><tr><th>Milestone</th><th>Assigned role</th></tr>"]
+    for chunk in chunks:
+        parts.append(
+            f"<tr><td>{html.escape(str(chunk['title']))}</td>"
+            f"<td>{html.escape(str(chunk.get('role') or 'implementer'))}</td></tr>"
+        )
+    parts.append("</table>")
+
+    parts.append("<h3>Resolved staffing</h3>")
+    parts.append("<table><tr><th>Role</th><th>Model</th><th>Effort</th><th>Material constraints</th></tr>")
+    for binding in staffing:
+        mind = binding.get("mind") if isinstance(binding.get("mind"), dict) else {}
+        constraints = binding.get("constraints") if isinstance(binding.get("constraints"), dict) else {}
+        preferred = binding.get("preferred") if isinstance(binding.get("preferred"), dict) else {}
+        material = {**constraints, **preferred}
+        material_text = ", ".join(f"{key}={value}" for key, value in sorted(material.items())) or "none"
+        family = str(mind.get("family") or "")
+        model = str(mind.get("model") or "")
+        resolved_model = f"{family}/{model}" if family else model
+        parts.append(
+            f"<tr><td>{html.escape(str(binding.get('role') or ''))}</td>"
+            f"<td>{html.escape(resolved_model)}</td>"
+            f"<td>{html.escape(str(mind.get('effort') or 'default'))}</td>"
+            f"<td>{html.escape(material_text)}</td></tr>"
+        )
+    parts.append("</table>")
+    expected = config.get("expected_iterations", {})
+    parts.append(
+        "<p><strong>Dispatch exposure:</strong> "
+        f"planner estimate {expected.get('min')}–{expected.get('max')} calls; "
+        f"hard maximum {config.get('max_iterations')} calls.</p>"
+    )
+
+    diagnostics: list[str] = ["<details><summary>Implementation diagnostics</summary>"]
     for chunk in chunks:
         role = chunk.get("role", "implementer")
         effort = f" ({html.escape(str(chunk['effort']))})" if chunk.get("effort") else ""
         review = "no" if chunk.get("review") is False else "one round against the must-fix bar"
-        parts.append(f"<h3>Chunk {chunk['id']} — {html.escape(str(chunk['title']))}</h3>")
-        parts.append(
+        diagnostics.append(f"<h3>Chunk {chunk['id']} — {html.escape(str(chunk['title']))}</h3>")
+        diagnostics.append(
             f"<p class='muted'>Role {html.escape(str(role))}{effort} · check <code>{html.escape(str(chunk.get('check') or 'none'))}</code> · review {review}</p>"
         )
-        parts.append("<table><tr><th>#</th><th>Task</th><th>Done when</th><th>Check</th><th>After</th><th>Role</th></tr>")
+        diagnostics.append("<table><tr><th>#</th><th>Task</th><th>Done when</th><th>Check</th><th>After</th><th>Role</th></tr>")
         for task in by_chunk.get(chunk["id"], []):
             after = ", ".join(str(item) for item in task.get("depends_on", []))
-            parts.append(
+            diagnostics.append(
                 f"<tr><td>{task['id']}</td><td>{html.escape(str(task['title']))}</td>"
                 f"<td>{html.escape(str(task.get('done_when', '')))}</td>"
                 f"<td><code>{html.escape(str(task.get('check') or ''))}</code></td>"
                 f"<td>{after}</td><td>{html.escape(str(task.get('role') or ''))}</td></tr>"
             )
-        parts.append("</table>")
-    counts: dict[str, int] = {}
-    for chunk in chunks:
-        for task in by_chunk.get(chunk["id"], []):
-            role = task.get("role") or chunk.get("role", "implementer")
-            counts[role] = counts.get(role, 0) + 1
-    parts.append("<h3>Staffing</h3><table><tr><th>Role</th><th>Tasks</th></tr>")
-    for role, count in counts.items():
-        parts.append(f"<tr><td>{html.escape(role)}</td><td>{count}</td></tr>")
-    reviews = sum(1 for chunk in chunks if chunk.get("review") is not False)
-    parts.append(f"<tr><td>reviewer</td><td>{reviews} chunk review(s)</td></tr>")
-    parts.append("<tr><td>closer</td><td>1 acceptance pass</td></tr></table>")
+        diagnostics.append("</table>")
     bounds = (
         f"Ceiling {config.get('max_iterations', 60)} iterations · retry cap {config.get('retry_cap', 3)} · "
         f"{config.get('iteration_timeout', 3600)}s per iteration"
@@ -163,7 +192,9 @@ def plan_tables(plan: dict[str, Any]) -> str:
         bounds += f" · whole-flight check <code>{html.escape(str(config['check']))}</code>"
     if config.get("preflight"):
         bounds += " · preflight " + ", ".join(f"<code>{html.escape(str(item))}</code>" for item in config["preflight"])
-    parts.append(f"<p class='muted'>{bounds}</p>")
+    diagnostics.append(f"<p class='muted'>{bounds}</p>")
+    diagnostics.append("</details>")
+    parts.extend(diagnostics)
     return "\n".join(parts)
 
 

@@ -23,7 +23,7 @@ Build the toy result.
 
 ## Observable expectations
 
-- The toy result is visible. <!-- id: toy-result -->
+- The toy result is visible. <!-- id: toy-expectation -->
 
 ## Exclusions
 
@@ -31,7 +31,7 @@ Build the toy result.
 
 ## Acceptance scenarios
 
-- Show the completed toy result. <!-- id: show-result; covers: toy-result -->
+- The toy result is visible. <!-- id: toy-result; covers: toy-expectation -->
   - Demonstration: A transcript contains the completed result.
   - Limitation: None.
 
@@ -70,19 +70,37 @@ Final all-ok: CONFIRMED
         self.assertEqual(git(self.root, "rev-parse", "--abbrev-ref", "HEAD").strip(), "autopilot/build-the-toy")
         self.assertEqual(git(self.root, "status", "--porcelain").strip(), "", "flight state is untracked")
         self.assertNotIn("flight", git(self.root, "log", "--oneline").casefold())
+        needs_plan = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual(needs_plan["readiness"]["state"], "needs_plan")
+        self.assertEqual(needs_plan["next_action"]["kind"], "write_plan")
         missing = self.cli("plan", "--no-open")
         self.assertEqual(missing.returncode, 1)
         self.assertIn("no plan", missing.stderr)
-        Flight(self.root).plan_path.write_text(plan_markdown(toy_plan([task(1, "first"), task(2, "second")])))
+        flight = Flight(self.root)
+        original_plan = plan_markdown(toy_plan([task(1, "first"), task(2, "second")]))
+        flight.plan_path.write_text(original_plan)
         planned = self.cli("plan", "--no-open")
         self.assertEqual(planned.returncode, 0, planned.stderr)
         page = (self.root / ".autopilot" / "flight-plan.html").read_text()
         self.assertIn("<title>Toy plan</title>", page)
-        self.assertIn("<td>first</td>", page)
+        self.assertIn("Resolved staffing", page)
+        self.assertIn("generic/fake", page)
+        self.assertIn("<details><summary>Implementation diagnostics</summary>", page)
+        self.assertIn("<td>first</td>", page, "task detail remains available only in diagnostics")
+        needs_approval = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual(needs_approval["readiness"]["state"], "needs_approval")
 
         approved = self.cli("approve", "--json")
         self.assertEqual(approved.returncode, 0, approved.stderr)
         self.assertEqual(json.loads(approved.stdout)["status"], "approved")
+        ready = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual(ready["readiness"]["state"], "ready_to_start")
+        flight.plan_path.write_text(original_plan + "\nMaterial change.\n")
+        stale = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual(stale["readiness"]["state"], "stale_approval")
+        self.assertEqual(stale["next_action"]["kind"], "reapprove")
+        flight.plan_path.write_text(original_plan)
+        self.assertEqual(self.cli("approve").returncode, 0)
 
         started = self.cli("start")
         self.assertEqual(started.returncode, 0, started.stderr)
@@ -104,8 +122,13 @@ Final all-ok: CONFIRMED
 
         landed = self.cli("land")
         self.assertEqual(landed.returncode, 0, landed.stderr)
-        self.assertIn("Flight workspace deleted", landed.stdout)
+        self.assertIn("Final Handoff preserved", landed.stdout)
+        self.assertIn("Flight machinery deleted", landed.stdout)
         self.assertFalse((self.root / ".autopilot").exists())
+        exports = list((self.root / ".handoff").iterdir())
+        self.assertEqual(len(exports), 1)
+        self.assertTrue((exports[0] / "proof.json").is_file())
+        self.assertTrue((exports[0] / "handoff.html").is_file())
         self.assertEqual(git(self.root, "status", "--porcelain").strip(), "")
         self.assertNotIn("flight", git(self.root, "log", "--oneline").casefold())
         after = self.cli("status")

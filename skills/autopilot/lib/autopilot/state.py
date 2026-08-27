@@ -63,6 +63,7 @@ class Flight:
         self.plan_page_path = self.dir / "flight-plan.html"
         self.requirements_path = self.dir / "requirements.md"
         self.acceptance_receipt_path = self.dir / "acceptance-receipt.json"
+        self.acceptance_path = self.dir / "acceptance.json"
         self.approval_path = self.dir / "plan-approval.json"
         self.handoff_dir = self.dir / "handoff"
         self.events_path = self.dir / "events.log"

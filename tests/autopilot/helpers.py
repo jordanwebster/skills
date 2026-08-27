@@ -11,7 +11,7 @@ import tempfile
 import unittest
 
 from autopilot import gitops
-from autopilot import approval
+from autopilot import acceptance, approval
 from autopilot.plan import read_plan, seed_flight
 from autopilot.roster import Roster
 from autopilot.state import Flight
@@ -42,9 +42,15 @@ def plan_markdown(plan: dict) -> str:
 
 
 def toy_plan(tasks: list[dict], *, chunks: list[dict] | None = None, config: dict | None = None) -> dict:
+    ceiling = (config or {}).get("max_iterations", 30)
+    selected_config = {
+        "max_iterations": 30,
+        "expected_iterations": {"min": min(3, ceiling), "max": min(8, ceiling)},
+    }
+    selected_config.update(config or {})
     return {
         "goal": "Build the toy",
-        "config": config or {"max_iterations": 30},
+        "config": selected_config,
         "evidence": [
             {
                 "id": "toy-result",
@@ -125,6 +131,31 @@ class FlightCase(unittest.TestCase):
                     "confirmed_at": "2026-01-01T00:00:00+00:00",
                 }
             )
+        )
+        acceptance.write(
+            flight.acceptance_path,
+            {
+                "schema_version": 1,
+                "ok": True,
+                "contract_digest": approval.digest_bytes(flight.requirements_path.read_bytes()),
+                "confirmed_at": "2026-01-01T00:00:00+00:00",
+                "acceptance": {
+                    "goal": "Build the toy",
+                    "expectations": [
+                        {"id": "toy-expectation", "description": "The toy result is visible.", "kind": "outcome"}
+                    ],
+                    "demonstrations": [
+                        {
+                            "id": "toy-result",
+                            "description": "The toy result is visible.",
+                            "covers": ["toy-expectation"],
+                            "demonstration": "A transcript contains the completed result.",
+                            "limitation": "None.",
+                        }
+                    ],
+                    "accepted_gaps": [],
+                },
+            },
         )
         flight.plan_path.write_text(plan_markdown(plan))
         seed_flight(flight, read_plan(flight.plan_path))

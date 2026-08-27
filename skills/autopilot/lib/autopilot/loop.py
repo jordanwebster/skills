@@ -374,7 +374,11 @@ class Driver:
             flight.event(f"acceptance: closer filed {len(gaps)} gap task(s)")
             flight.save()
             return
-        result = landing.finish(flight.handoff_dir, environment=self.environment)
+        result = landing.finish(
+            flight.handoff_dir,
+            acceptance_path=flight.acceptance_path,
+            environment=self.environment,
+        )
         if not result.ok:
             flight.add_task(
                 "Complete the decision-ready proof bundle",

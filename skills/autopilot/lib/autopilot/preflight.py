@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import shutil
 from typing import Any
 
-from . import dispatch, landing
+from . import acceptance, dispatch, landing
 from .plan import plan_bindings
 from .roster import Roster, RosterError
 from .state import Flight
@@ -32,17 +32,13 @@ def run(
     environment: Mapping[str, str] | None = None,
 ) -> list[Check]:
     checks: list[Check] = []
-    handoff_command = landing.command(environment)
-    handoff_executable = handoff_command[0] if handoff_command else "handoff"
-    handoff_found = shutil.which(handoff_executable)
-    checks.append(
-        Check(
-            "dependency",
-            "handoff",
-            handoff_found is not None,
-            handoff_found or f"{handoff_executable} not found",
-        )
-    )
+    for dependency, invocation in (
+        ("intake", acceptance.command(environment)),
+        ("handoff", landing.command(environment)),
+    ):
+        executable = invocation[0] if invocation else dependency
+        found = shutil.which(executable)
+        checks.append(Check("dependency", dependency, found is not None, found or f"{executable} not found"))
     seen_commands: set[str] = set()
     for role, effort in plan_bindings(plan):
         subject = role + (f"/{effort}" if effort else "")

@@ -26,7 +26,8 @@ another agent will consume output.
 ## Consumes
 
 - A confirmed acceptance contract and its adjacent compatible acceptance
-  receipt. It may come from Intake or another durable source; do not repeat
+  receipt, normalized through Intake's public `inspect --json` boundary. It may
+  come from Intake or another compatible durable source; do not repeat
   alignment when the existing contract is already confirmed.
 - A plan from one fresh planner-role context, including design, evidence
   coverage, staffing requests, bounds, chunks, and machine tasks.
@@ -104,6 +105,7 @@ park | unpark | reset`. Genuine operator decisions use `autopilot escalate`;
 record the answer with `autopilot answer`.
 
 At landing, `autopilot status --open` opens Handoff's decision page. After the
-operator has read it, `autopilot land` removes only the untracked flight
-workspace and prints parked follow-ups for optional filing. Merge remains the
-operator's act.
+operator has read it, `autopilot land` moves the final proof bundle, evidence,
+and decision page to `.handoff/<flight>-<commit>/`, removes the remaining
+untracked flight machinery, and prints parked follow-ups for optional filing.
+Merge remains the operator's act.

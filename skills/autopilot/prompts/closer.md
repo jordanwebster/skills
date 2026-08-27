@@ -26,7 +26,7 @@ file a gap task. Optional polish is a parked follow-up. Otherwise write
   },
   "changes": ["WHAT A USER CAN NOW DO"],
   "accepted_demonstrations": [
-    {"id": "stable-subject", "description": "WHAT THE OPERATOR AGREED TO SEE"}
+    {"id": "COPY EXACT ID FROM .autopilot/acceptance.json", "description": "COPY EXACT DESCRIPTION"}
   ],
   "claims": [
     {
@@ -44,7 +44,9 @@ file a gap task. Optional polish is a parked follow-up. Otherwise write
 
 A replay may instead be `{"kind":"steps","steps":[...]}` or
 `{"kind":"not_replayable","accepted_reason":"why this boundary was accepted","limitation":"what remains unobserved"}`.
-Copy each used capture into `.autopilot/handoff/evidence/`; artifact paths
+Copy `accepted_demonstrations` exactly from `.autopilot/acceptance.json`; the
+driver rejects an omitted, added, or renamed confirmed demonstration before
+Handoff. Copy each used capture into `.autopilot/handoff/evidence/`; artifact paths
 must remain inside the Handoff workspace. Coverage is
 many-to-many: one claim may reference several demonstrations and several
 claims may reference one demonstration. Preserve accepted demonstrations;

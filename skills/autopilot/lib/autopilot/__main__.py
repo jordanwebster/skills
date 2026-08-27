@@ -14,7 +14,7 @@ import sys
 import time
 from typing import Any
 
-from . import approval, gitops, preflight, prompt, render, supervise
+from . import acceptance, approval, gitops, preflight, prompt, render, supervise
 from .dispatch import run_agent
 from .loop import Driver
 from .plan import PlanError, read_plan, seed_flight
@@ -262,6 +262,7 @@ def cmd_init(args: argparse.Namespace) -> int:
             f"record it with `intake finalize {args.requirements}`"
         )
     approval.validate_acceptance_files(args.requirements, receipt)
+    inspection = acceptance.inspect(args.requirements, receipt)
     branch = args.branch or f"autopilot/{_slug(args.goal)}"
     gitops.exclude(root, ".autopilot/")
     if gitops.is_dirty(root):
@@ -270,6 +271,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     flight.create(args.goal.strip(), branch, gitops.head(root))
     shutil.copyfile(args.requirements, flight.requirements_path)
     shutil.copyfile(receipt, flight.acceptance_receipt_path)
+    acceptance.write(flight.acceptance_path, inspection)
     flight.event(f"flight created on {branch}")
     print(f"Flight created in {flight.dir} (untracked) on branch {branch}.")
     print("Next: write the plan (`autopilot plan --dispatch`, or dispatch the planner yourself), review it, then `autopilot start`.")
@@ -331,7 +333,9 @@ def cmd_approve(args: argparse.Namespace) -> int:
     if flight.tasks:
         raise StateError("the flight has already started; its seeded plan cannot be reapproved in place")
     plan = read_plan(flight.plan_path)
+    inspection = acceptance.inspect(flight.requirements_path, flight.acceptance_receipt_path)
     receipt = approval.approve(flight, plan, Roster())
+    acceptance.write(flight.acceptance_path, inspection)
     flight.event("current plan and semantic staffing approved")
     if args.json:
         print(json.dumps({"schema_version": 1, "status": "approved", **receipt}, sort_keys=True))
@@ -345,9 +349,13 @@ def _render_plan(flight: Flight) -> Path:
     """Render the Markdown plan to its HTML page; the page is always regenerated."""
 
     plan = read_plan(flight.plan_path)
+    staffing, _ = approval.resolved_staffing(plan, Roster())
     text = flight.plan_path.read_text(encoding="utf-8")
     title, body = render.split_title(text, default=f"Flight plan: {flight.data['goal']}")
-    flight.plan_page_path.write_text(render.flight_plan(body, plan, title=title, base=flight.dir), encoding="utf-8")
+    flight.plan_page_path.write_text(
+        render.flight_plan(body, plan, title=title, base=flight.dir, staffing=staffing),
+        encoding="utf-8",
+    )
     return flight.plan_page_path
 
 
@@ -412,11 +420,17 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 0
     if args.open:
         handoff = flight.data.get("handoff") or {}
-        target = Path(handoff["output"]) if flight.data["status"] == "landed" and handoff.get("output") else _render_plan(flight)
+        if flight.data["status"] == "landed" and handoff.get("output"):
+            target = Path(handoff["output"])
+        elif flight.plan_path.is_file():
+            target = _render_plan(flight)
+        else:
+            raise StateError("there is no plan to open yet; dispatch the planner first")
         _open_in_browser(target)
     print(f"Goal: {payload['goal']}")
     progress = payload["progress"]
-    print(f"Progress: {progress['milestones_done']}/{progress['milestones_total']} milestones · {payload['status']}")
+    visible_state = payload["readiness"]["state"] if payload["status"] == "planned" else payload["status"]
+    print(f"Progress: {progress['milestones_done']}/{progress['milestones_total']} milestones · {visible_state}")
     print(f"Driver: {payload['driver']['health']} — {payload['driver']['summary']}")
     if payload["current_work"]:
         print("Current: " + "; ".join(item["title"] for item in payload["current_work"]))
@@ -433,6 +447,7 @@ def _status_payload(flight: Flight, driver: Any) -> dict[str, Any]:
         for item in flight.open_escalations()
     ]
     failure = flight.data.get("failure")
+    readiness = _prestart_readiness(flight) if flight.data["status"] == "planned" else {"state": "not_applicable"}
     if flight.data["status"] == "landed":
         next_action = {"kind": "read_completion", "text": "read the completion page.", "command": "autopilot status --open"}
     elif questions:
@@ -443,13 +458,21 @@ def _status_payload(flight: Flight, driver: Any) -> dict[str, Any]:
         }
     elif isinstance(failure, dict) and failure.get("class") == "config":
         next_action = {"kind": "repair_config", "text": str(failure.get("recovery") or "repair configuration, then restart.")}
-    elif flight.data["status"] == "planned" and not flight.approval_path.is_file():
-        next_action = {"kind": "approve", "text": "review and approve the plan.", "command": "autopilot approve"}
+    elif readiness["state"] == "needs_plan":
+        next_action = {"kind": "write_plan", "text": "dispatch the planner.", "command": "autopilot plan --dispatch"}
+    elif readiness["state"] == "invalid_plan":
+        next_action = {"kind": "repair_plan", "text": readiness["recovery"]}
+    elif readiness["state"] == "needs_approval":
+        next_action = {"kind": "approve", "text": "review the plan and approve it.", "command": "autopilot plan"}
+    elif readiness["state"] == "stale_approval":
+        next_action = {"kind": "reapprove", "text": readiness["recovery"], "command": "autopilot approve"}
+    elif readiness["state"] == "blocked_configuration":
+        next_action = {"kind": "repair_config", "text": readiness["recovery"]}
     elif flight.data["status"] == "exhausted":
         next_action = {"kind": "review_exhaustion", "text": "review the exhausted flight and decide whether to start a revised one."}
     elif flight.data["status"] == "stopped" or (flight.data["status"] == "running" and not driver.alive):
         next_action = {"kind": "restart", "text": "restart the flight.", "command": "autopilot start"}
-    elif flight.data["status"] == "planned":
+    elif readiness["state"] == "ready_to_start":
         next_action = {"kind": "start", "text": "start the flight.", "command": "autopilot start"}
     else:
         next_action = {"kind": "none", "text": "nothing needed."}
@@ -457,6 +480,7 @@ def _status_payload(flight: Flight, driver: Any) -> dict[str, Any]:
         "schema_version": 1,
         "goal": flight.data["goal"],
         "status": flight.data["status"],
+        "readiness": readiness,
         "progress": {
             "milestones_done": sum(chunk["status"] == "done" for chunk in flight.chunks),
             "milestones_total": len(flight.chunks),
@@ -478,6 +502,28 @@ def _status_payload(flight: Flight, driver: Any) -> dict[str, Any]:
             "recent_events": flight.recent_events(20),
         },
     }
+
+
+def _prestart_readiness(flight: Flight) -> dict[str, str]:
+    if not flight.plan_path.is_file():
+        return {"state": "needs_plan"}
+    try:
+        plan = read_plan(flight.plan_path)
+    except PlanError as error:
+        return {"state": "invalid_plan", "detail": str(error), "recovery": "repair the flight plan, then render it again."}
+    if not flight.approval_path.is_file():
+        return {"state": "needs_approval"}
+    try:
+        approval.validate(flight, plan, Roster())
+    except RosterError as error:
+        return {"state": "blocked_configuration", "detail": str(error), "recovery": error.recovery}
+    except StateError as error:
+        return {
+            "state": "stale_approval",
+            "detail": str(error),
+            "recovery": "review the changed acceptance, plan, or staffing and approve it again.",
+        }
+    return {"state": "ready_to_start"}
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -692,8 +738,22 @@ def cmd_land(args: argparse.Namespace) -> int:
     if supervise.locked_owner(flight.runtime_dir):
         raise StateError("a driver is still running; stop it first")
     follow_ups = flight.parked_tasks()
+    handoff = flight.data.get("handoff") or {}
+    reviewed_commit = str(handoff.get("reviewed_commit") or "unknown")
+    if not flight.handoff_dir.is_dir():
+        raise StateError("the landed flight has no final Handoff workspace to preserve")
+    gitops.exclude(flight.root, ".handoff/")
+    export_root = flight.root / ".handoff"
+    export_root.mkdir(parents=True, exist_ok=True)
+    export_path = export_root / f"{_slug(flight.data['goal'])}-{reviewed_commit[:12]}"
+    if export_path.exists():
+        raise StateError(f"final Handoff export already exists at {export_path}; move it aside, then land again")
+    shutil.move(str(flight.handoff_dir), str(export_path))
+    output_name = Path(str(handoff.get("output") or "handoff.html")).name
+    preserved_output = export_path / output_name
     shutil.rmtree(flight.dir)
-    print(f"Flight workspace deleted. Branch {flight.data['branch']} is ready for review and merge.")
+    print(f"Final Handoff preserved: {preserved_output}")
+    print(f"Flight machinery deleted. Branch {flight.data['branch']} is ready for review and merge.")
     if follow_ups:
         print("Follow-ups to file (on the operator's word), e.g. with the tasks skill:")
         for task in follow_ups:

@@ -65,13 +65,35 @@ class PlanPageTests(unittest.TestCase):
     def test_plan_block_becomes_tables(self) -> None:
         plan = {
             "goal": "Build it",
-            "config": {"max_iterations": 9, "check": "make test", "preflight": ["npx playwright --version"]},
+            "config": {
+                "max_iterations": 9,
+                "expected_iterations": {"min": 4, "max": 6},
+                "check": "make test",
+                "preflight": ["npx playwright --version"],
+            },
             "chunks": [{"id": 1, "title": "Core", "role": "implementer", "check": "make unit"}],
             "tasks": [{"id": 1, "chunk": 1, "title": "Add the thing", "done_when": "it exists", "role": "ui-developer"}],
         }
         text = "## Goal\n\nBuild it.\n\n## Chunks and tasks\n\n```flight-plan\n{\"ignored\": true}\n```\n\n## Out of scope\n\n- nothing\n"
-        html = render.flight_plan(text, plan, title="Flight plan: Build it")
+        html = render.flight_plan(
+            text,
+            plan,
+            title="Flight plan: Build it",
+            staffing=[
+                {
+                    "role": "implementer",
+                    "mind": {"family": "codex", "model": "gpt-test", "effort": "high"},
+                    "constraints": {"sandbox": "workspace-write"},
+                    "preferred": {},
+                }
+            ],
+        )
         self.assertIn("<h3>Goal</h3>", html)
+        self.assertIn("<td>Core</td><td>implementer</td>", html)
+        self.assertIn("codex/gpt-test", html)
+        self.assertIn("planner estimate 4–6 calls", html)
+        self.assertIn("hard maximum 9 calls", html)
+        self.assertIn("<details><summary>Implementation diagnostics</summary>", html)
         self.assertIn("<h3>Chunk 1 — Core</h3>", html)
         self.assertIn("<td>Add the thing</td>", html)
         self.assertIn("<td>ui-developer</td>", html)

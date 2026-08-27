@@ -119,6 +119,21 @@ def _validate(plan: Any) -> dict[str, Any]:
     config = plan.get("config", {})
     if not isinstance(config, dict):
         raise PlanError("plan config must be an object")
+    ceiling = config.get("max_iterations")
+    expected = config.get("expected_iterations")
+    if not isinstance(ceiling, int) or isinstance(ceiling, bool) or ceiling < 1:
+        raise PlanError("plan config.max_iterations must be a positive integer")
+    if (
+        not isinstance(expected, dict)
+        or set(expected) != {"min", "max"}
+        or any(not isinstance(expected.get(key), int) or isinstance(expected.get(key), bool) for key in ("min", "max"))
+        or expected["min"] < 1
+        or expected["min"] > expected["max"]
+        or expected["max"] > ceiling
+    ):
+        raise PlanError(
+            "plan config.expected_iterations must be {min,max} with 1 <= min <= max <= max_iterations"
+        )
     preflight = config.get("preflight", [])
     if not isinstance(preflight, list) or any(not isinstance(item, str) for item in preflight):
         raise PlanError("plan config.preflight must be a list of shell commands")

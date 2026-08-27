@@ -44,13 +44,14 @@ before takeoff; a missing one stops the flight before it starts.
 WHAT CAN ONLY BE JUDGED BY A PERSON, AND WHERE THAT SHOWS UP ON THE
 WRAP-UP PAGE.
 
-## Chunks and tasks
+## Milestones
 
 ```flight-plan
 {
   "goal": "ONE SENTENCE",
   "config": {
     "max_iterations": 40,
+    "expected_iterations": {"min": 8, "max": 14},
     "retry_cap": 3,
     "iteration_timeout": 3600,
     "check": "timeout 1800 ./path/to/whole-flight-check",
@@ -77,9 +78,11 @@ WRAP-UP PAGE.
 
 ## Staffing
 
-WHICH ROLE DOES WHAT AND WHY. Roles resolve to models through the
-operator's roster; the table above counts tasks per role. ROUGH SHAPE OF
-THE RUN: iterations expected, anything unusually expensive.
+WHICH ROLE DOES WHAT AND WHY. Roles resolve to models through the operator's
+roster; the page derives the actual model, effort, and material constraints.
+Explain the expected dispatch range recorded in `config.expected_iterations`
+and anything unusually expensive. The range is an honest planner estimate;
+`max_iterations` is the hard ceiling.
 
 ## What you will be asked
 
