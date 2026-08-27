@@ -7,7 +7,7 @@ import json
 import sys
 
 from . import SCHEMA_VERSION
-from .contract import ContractError, finalize
+from .contract import ContractError, finalize, inspect_contract
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,6 +17,11 @@ def build_parser() -> argparse.ArgumentParser:
     command.add_argument("contract")
     command.add_argument("--json", action="store_true", help="print stable machine-readable output")
     command.set_defaults(handler=cmd_finalize)
+    command = subparsers.add_parser("inspect", help="read normalized confirmed acceptance")
+    command.add_argument("contract")
+    command.add_argument("--receipt", help="acceptance receipt path (default: adjacent sidecar)")
+    command.add_argument("--json", action="store_true", help="print stable machine-readable output")
+    command.set_defaults(handler=cmd_inspect)
     return parser
 
 
@@ -52,6 +57,26 @@ def cmd_finalize(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inspect(args: argparse.Namespace) -> int:
+    contract, receipt_path, inspection = inspect_contract(args.contract, args.receipt)
+    result = {
+        "schema_version": SCHEMA_VERSION,
+        "ok": True,
+        "contract": str(contract.path),
+        "receipt": str(receipt_path),
+        **inspection,
+    }
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    else:
+        demonstrations = inspection["acceptance"]["demonstrations"]
+        gaps = inspection["acceptance"]["accepted_gaps"]
+        print(f"Confirmed acceptance: {contract.path}")
+        print(f"Demonstrations: {len(demonstrations)}")
+        print(f"Accepted gaps: {len(gaps)}")
+    return 0
+
+
 def error_payload(error: ContractError) -> dict[str, object]:
     return {
         "schema_version": SCHEMA_VERSION,
@@ -62,4 +87,3 @@ def error_payload(error: ContractError) -> dict[str, object]:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

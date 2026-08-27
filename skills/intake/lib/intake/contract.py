@@ -100,6 +100,92 @@ def finalize(path: str | Path) -> tuple[Contract, Path, dict[str, object]]:
     return contract, receipt_path, receipt
 
 
+def inspect_contract(
+    path: str | Path,
+    receipt_path: str | Path | None = None,
+) -> tuple[Contract, Path, dict[str, object]]:
+    """Return normalized confirmed acceptance through Intake's public boundary."""
+
+    contract = read_contract(path)
+    selected_receipt = (
+        Path(receipt_path).expanduser().resolve()
+        if receipt_path is not None
+        else contract.path.with_name(contract.path.name + ".acceptance.json")
+    )
+    try:
+        receipt = json.loads(selected_receipt.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise ContractError(
+            "receipt_missing",
+            f"acceptance receipt does not exist at {selected_receipt}",
+            "Finalize the confirmed contract before inspecting it.",
+        ) from error
+    except (OSError, json.JSONDecodeError) as error:
+        raise ContractError(
+            "invalid_receipt",
+            f"cannot read acceptance receipt {selected_receipt}: {error}",
+            "Finalize the confirmed contract again.",
+        ) from error
+    required = {"schema_version", "contract_digest", "confirmed_at"}
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt) != required
+        or receipt.get("schema_version") != SCHEMA_VERSION
+        or not isinstance(receipt.get("contract_digest"), str)
+        or not isinstance(receipt.get("confirmed_at"), str)
+        or not receipt["confirmed_at"].strip()
+    ):
+        raise ContractError(
+            "invalid_receipt",
+            f"acceptance receipt at {selected_receipt} has an unsupported shape",
+            "Finalize the confirmed contract again.",
+        )
+    if receipt["contract_digest"] != contract.digest:
+        raise ContractError(
+            "stale_receipt",
+            "acceptance receipt does not match the current contract",
+            "Confirm the changed contract and finalize it again.",
+        )
+
+    expectations = _items(contract.sections["Observable expectations"], "Observable expectations", allow_none=False)
+    exclusions = _items(contract.sections["Exclusions"], "Exclusions", allow_none=True)
+    scenarios = _items(contract.sections["Acceptance scenarios"], "Acceptance scenarios", allow_none=False)
+    gaps = _items(contract.sections["Accepted gaps"], "Accepted gaps", allow_none=True)
+    goal = " ".join(line.strip() for line in contract.sections["Goal"] if line.strip())
+    normalized: dict[str, object] = {
+        "goal": goal,
+        "expectations": [
+            {"id": item.identifier, "description": item.text, "kind": kind}
+            for kind, items in (("outcome", expectations), ("exclusion", exclusions))
+            for item in items
+        ],
+        "demonstrations": [
+            {
+                "id": item.identifier,
+                "description": item.text,
+                "covers": sorted(_coverage_values(item)),
+                "demonstration": item.fields["demonstration"],
+                "limitation": item.fields["limitation"],
+            }
+            for item in scenarios
+        ],
+        "accepted_gaps": [
+            {
+                "id": item.identifier,
+                "description": item.text,
+                "covers": sorted(_coverage_values(item)),
+                "limitation": item.fields["limitation"],
+            }
+            for item in gaps
+        ],
+    }
+    return contract, selected_receipt, {
+        "contract_digest": contract.digest,
+        "confirmed_at": receipt["confirmed_at"],
+        "acceptance": normalized,
+    }
+
+
 def _sections(text: str) -> dict[str, list[str]]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
@@ -265,7 +351,7 @@ def _require_fields(item: Item, section: str, fields: tuple[str, ...]) -> None:
 
 
 def _coverage(item: Item, expectation_ids: set[str], kind: str) -> set[str]:
-    referenced = {value.strip() for value in item.fields["covers"].split(",") if value.strip()}
+    referenced = _coverage_values(item)
     unknown = sorted(referenced - expectation_ids)
     if not referenced or unknown:
         detail = "no expectation IDs" if not referenced else f"unknown IDs: {', '.join(unknown)}"
@@ -275,6 +361,10 @@ def _coverage(item: Item, expectation_ids: set[str], kind: str) -> set[str]:
             "List comma-separated IDs from Observable expectations.",
         )
     return referenced
+
+
+def _coverage_values(item: Item) -> set[str]:
+    return {value.strip() for value in item.fields["covers"].split(",") if value.strip()}
 
 
 def _write_json_atomic(path: Path, value: dict[str, object]) -> None:

@@ -106,6 +106,42 @@ class IntakeCliTests(unittest.TestCase):
         self.assertEqual(set(receipt), {"schema_version", "contract_digest", "confirmed_at"})
         self.assertEqual(receipt["contract_digest"], digest)
 
+    def test_inspect_returns_confirmed_normalized_acceptance(self) -> None:
+        self.path.write_text(contract(), encoding="utf-8")
+        self.assertEqual(self.run_cli("finalize", str(self.path), "--json").returncode, 0)
+        result = self.run_cli("inspect", str(self.path), "--json")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = json.loads(result.stdout)
+        acceptance = output["acceptance"]
+        self.assertEqual(
+            acceptance["expectations"],
+            [
+                {"id": "retry", "description": "A transient failure is retried.", "kind": "outcome"},
+                {"id": "no-duplicate", "description": "A retry never creates a second charge.", "kind": "exclusion"},
+            ],
+        )
+        self.assertEqual(
+            acceptance["demonstrations"],
+            [
+                {
+                    "id": "test-gateway",
+                    "description": "Retry through the test gateway.",
+                    "covers": ["no-duplicate", "retry"],
+                    "demonstration": "A transcript at the payment boundary.",
+                    "limitation": "The gateway is a test environment.",
+                }
+            ],
+        )
+        self.assertEqual(acceptance["accepted_gaps"], [])
+
+    def test_inspect_rejects_a_stale_receipt(self) -> None:
+        self.path.write_text(contract(), encoding="utf-8")
+        self.assertEqual(self.run_cli("finalize", str(self.path), "--json").returncode, 0)
+        self.path.write_text(contract().replace("transient checkout", "temporary checkout"), encoding="utf-8")
+        result = self.run_cli("inspect", str(self.path), "--json")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(json.loads(result.stdout)["error"]["code"], "stale_receipt")
+
     def test_pending_confirmation_is_an_actionable_json_error(self) -> None:
         self.path.write_text(contract(confirmed=False), encoding="utf-8")
         result = self.run_cli("finalize", str(self.path), "--json")

@@ -43,12 +43,17 @@ confirmation marker and run:
 
 ```text
 intake finalize <contract> [--json]
+intake inspect <contract> [--receipt PATH] [--json]
 ```
 
 The command validates structure, coverage, resolved decisions, expansions, and
 unfinished placeholders, then atomically writes
 `<contract>.acceptance.json`. It cannot judge semantic consistency or confer
 authority; invoking it asserts that the operator already gave the final all-ok.
+`inspect` validates the current receipt and returns normalized expectations,
+demonstrations, coverage, limitations, and accepted gaps. It is the public
+machine boundary for a planner or orchestrator that must prove an accepted
+demonstration did not disappear; callers do not parse Intake's Markdown.
 
 Return the confirmed contract to the conversational concierge. For one-sitting
 work, it normally resolves the configured implementer through Delegate unless
