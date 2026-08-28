@@ -89,8 +89,10 @@ current work, driver health, genuine questions, and its one next action.
 - It re-runs task and chunk checks itself, records state atomically, and seeds
   a plan only once.
 - When a milestone's tasks finish, its bounded check, review, repairs, and
-  recheck run before dependent implementation. A blocked milestone does not
-  prevent dependency-safe later work.
+  recheck run before dependent implementation. A milestone is dependent when
+  its tasks rest, directly or through other tasks, on the reviewed one's, so
+  an unfinished must-fix holds exactly that work and nothing else. A blocked
+  milestone does not prevent dependency-safe later work.
 - Restart recovers durable in-progress work and accepts a task whose check
   already passes instead of dispatching it twice.
 - Configuration failures stop immediately with one recovery action and consume

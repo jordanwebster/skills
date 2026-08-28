@@ -389,10 +389,66 @@ class Flight:
 
     # -- selection ------------------------------------------------------------
 
+    def chunk_dependencies(self) -> dict[int, set[int]]:
+        """Which milestones each milestone rests on, derived from its tasks.
+
+        Milestones carry no dependency edges of their own: a milestone rests on
+        another exactly when one of its tasks depends on a task there. Reading
+        the relation off the task graph keeps one fact in one place, so a plan
+        cannot state an order its tasks contradict."""
+
+        edges: dict[int, set[int]] = {chunk["id"]: set() for chunk in self.chunks}
+        for task in self.tasks:
+            for dependency in task["depends_on"]:
+                other = self.task(dependency)["chunk"]
+                if other != task["chunk"]:
+                    edges.setdefault(task["chunk"], set()).add(other)
+        closure = {key: set(value) for key, value in edges.items()}
+        changed = True
+        while changed:
+            changed = False
+            for key, reached in closure.items():
+                grown = reached | {item for step in reached for item in closure.get(step, ())}
+                if grown != reached:
+                    closure[key] = grown
+                    changed = True
+        return closure
+
+    def unrepaired_reviews(self) -> set[int]:
+        """Milestones whose review filed a repair that is not finished."""
+
+        return {
+            task["chunk"]
+            for task in self.tasks
+            if task.get("origin") == "review" and task["status"] != "done"
+        }
+
+    def review_gate(self) -> set[int]:
+        """Milestones held back because a milestone they rest on is still
+        being repaired after its review.
+
+        A must-fix finding is a statement that the milestone is not finished,
+        so work built on it would be built on something the reviewer rejected.
+        The milestone under repair is never gated by itself, so the repair can
+        always run, and milestones that rest on nothing under repair keep
+        going."""
+
+        unrepaired = self.unrepaired_reviews()
+        if not unrepaired:
+            return set()
+        dependencies = self.chunk_dependencies()
+        return {
+            chunk["id"]
+            for chunk in self.chunks
+            if (dependencies.get(chunk["id"], set()) - {chunk["id"]}) & unrepaired
+        }
+
     def is_ready(self, task: dict[str, Any]) -> bool:
         if task["status"] != "todo":
             return False
         if task["attempts"] >= self.config["retry_cap"]:
+            return False
+        if task["chunk"] in self.review_gate():
             return False
         return all(self.task(dependency)["status"] == "done" for dependency in task["depends_on"])
 

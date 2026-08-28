@@ -36,6 +36,33 @@ class StateTests(unittest.TestCase):
         self.assertEqual([task["id"] for task in self.flight.ready_tasks()], [2])
         self.assertTrue(self.flight.is_ready(second))
 
+    def test_an_unfinished_review_repair_gates_the_milestones_resting_on_it(self) -> None:
+        self.flight.add_chunk("three")
+        foundation = self.flight.add_task("foundation", chunk=1)
+        self.flight.set_status(foundation, "done")
+        self.flight.add_task("dependent", chunk=2, depends_on=[1])
+        self.flight.add_task("unrelated", chunk=3)
+        repair = self.flight.add_task("repair the finding", chunk=1, origin="review")
+
+        self.assertEqual({2}, self.flight.review_gate())
+        self.assertEqual([4, 3], [task["id"] for task in self.flight.ready_tasks()])
+
+        self.flight.set_status(repair, "blocked")
+        self.assertEqual({2}, self.flight.review_gate(), "a blocked repair still gates")
+        self.flight.set_status(repair, "parked")
+        self.assertEqual({2}, self.flight.review_gate(), "a parked repair is not a repair")
+
+        self.flight.set_status(repair, "done")
+        self.assertEqual(set(), self.flight.review_gate())
+        self.assertEqual([2, 3], [task["id"] for task in self.flight.ready_tasks()])
+
+    def test_milestone_dependencies_are_read_from_the_task_graph(self) -> None:
+        self.flight.add_chunk("three")
+        self.flight.add_task("foundation", chunk=1)
+        self.flight.add_task("dependent", chunk=2, depends_on=[1])
+        self.flight.add_task("transitively dependent", chunk=3, depends_on=[2])
+        self.assertEqual({1: set(), 2: {1}, 3: {1, 2}}, self.flight.chunk_dependencies())
+
     def test_retry_cap_removes_from_ready(self) -> None:
         task = self.flight.add_task("a", chunk=1)
         task["attempts"] = self.flight.config["retry_cap"]

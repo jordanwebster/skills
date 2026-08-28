@@ -121,6 +121,25 @@ class PlanTests(unittest.TestCase):
         with self.assertRaisesRegex(PlanError, "Approve this route"):
             read_plan(self.write(source.replace("Approve this route", "Start whenever")))
 
+    def test_a_plan_without_a_shape_is_not_a_design(self) -> None:
+        source = plan_markdown(toy_plan([task(1, "a")]))
+        shape = source[source.index("## Shape"):source.index("## Human judgment")]
+        with self.assertRaisesRegex(PlanError, "needs a ## Shape section"):
+            read_plan(self.write(source.replace(shape, "")))
+
+    def test_a_shape_names_components_interfaces_and_data(self) -> None:
+        source = plan_markdown(toy_plan([task(1, "a")]))
+        with self.assertRaisesRegex(PlanError, r"### Data shapes"):
+            read_plan(self.write(source.replace(
+                "### Data shapes\n\n- **Result** — the text the toy produced.\n", ""
+            )))
+        with self.assertRaisesRegex(PlanError, r"### Interfaces and APIs"):
+            read_plan(self.write(source.replace(
+                "- `toy()` — returns the result, never raises.\n", ""
+            )))
+        contract = read_plan(self.write(source))["_operator"]
+        self.assertIn("### Components", contract["shape"])
+
     def _two_milestone_source(self, *, first_extra: str = "", second_extra: str = "") -> str:
         plan = toy_plan(
             [task(1, "a"), task(2, "b", chunk=2)],

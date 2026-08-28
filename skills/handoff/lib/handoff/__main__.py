@@ -32,10 +32,26 @@ PLACEHOLDER_PATTERNS = (
 # Result<T, E>, and code spans are exempt outright.
 ANGLE_PLACEHOLDER = re.compile(r"<[a-z][a-z0-9_-]*>")
 CODE_SPAN = re.compile(r"`[^`]*`")
+# How the work was run is never a product fact, so a proof bundle may not carry
+# it. Each pattern names a construction that has no ordinary product reading:
+# the words themselves stay usable, because a product may well have milestones,
+# chunks, tasks, roles, and reviewers of its own.
 INTERNAL_PATTERNS = (
     re.compile(r"\b(?:task|chunk|dispatch|event|acceptance|evidence)[-_ ]?id\b", re.IGNORECASE),
     re.compile(r"\b(?:dispatch|event) logs?\b", re.IGNORECASE),
     re.compile(r"\.autopilot(?:/|\b)", re.IGNORECASE),
+    # A numbered milestone or chunk is a position in a flight, not a result.
+    re.compile(r"\b(?:milestone|chunk)s?\s+#?\d+\b", re.IGNORECASE),
+    # These units have no ordinary product reading. Ambiguous counts such as
+    # "three tasks" or "three iterations" remain valid product language unless
+    # another pattern supplies unmistakable flight context.
+    re.compile(r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|all)\s+"
+               r"(?:dispatches|review rounds|fix rounds)\b", re.IGNORECASE),
+    re.compile(r"\b(?:dispatches|review rounds|fix rounds)\s+(?:remain|remaining|completed)\b", re.IGNORECASE),
+    # Who was staffed on it, and on what.
+    re.compile(r"\b(?:planner|implementer|prober|closer|qa[- ]?tester|ui[- ]?developer)\s+"
+               r"(?:role|agent|model|persona)s?\b", re.IGNORECASE),
+    re.compile(r"\b(?:role|agent|model)\s+(?:signed off|was staffed|staffing)\b", re.IGNORECASE),
 )
 
 
@@ -341,7 +357,8 @@ def _artifact_view(workspace: Path, artifact: dict[str, Any]) -> dict[str, Any]:
         if lines <= INLINE_TEXT_LINES:
             return {"placement": "card", "html": f"<figure>{body}<figcaption>{caption}</figcaption></figure>"}
         return {"placement": "card", "html": operator_page.disclosure(
-            f"{label or path.name} ({lines} lines)", body, variant="inline dis--evidence",
+            f"{label or path.name} ({lines} lines)", body,
+            variant="inline dis--evidence", static_print=True,
         )}
     return {
         "placement": "appendix",
@@ -558,7 +575,7 @@ def render_page(bundle: dict[str, Any], workspace: Path) -> Path:
                 f"Evidence appendix ({len(appendix)} "
                 f"{_plural(len(appendix), 'file')}, {total // 1024} KB)",
                 "".join(item["html"] for item in appendix),
-                variant="block dis--evidence",
+                variant="block dis--evidence", static_print=True,
             ) + "</div>"
         )
     content.append(

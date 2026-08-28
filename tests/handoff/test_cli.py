@@ -236,6 +236,45 @@ class HandoffCliTests(unittest.TestCase):
         for word in PROCESS_WORDS:
             self.assertNotIn(word, page, word)
 
+    def test_process_telemetry_is_rejected_but_the_words_stay_usable(self) -> None:
+        for statement in (
+            "Milestone 2 completed all tasks.",
+            "Chunk 3 took six iterations.",
+            "The qa-tester role signed off.",
+        ):
+            bundle = self.bundle()
+            bundle["changes"] = [statement]
+            failed = self.run_handoff(bundle)
+            self.assertEqual(1, failed.returncode, statement)
+            self.assertIn("internal workflow", json.loads(failed.stdout)["error"]["message"], statement)
+
+        bundle = self.bundle()
+        bundle["changes"] = [
+            "The upload splits a file into chunks and retries each chunk.",
+            "A milestone view groups tasks by owner.",
+            "The solver converges in three iterations.",
+        ]
+        bundle["decisions"] = ["Reviewer notes now appear beside the diff."]
+        self.assertEqual(0, self.run_handoff(bundle).returncode)
+
+    def test_long_evidence_is_collapsed_on_screen_and_still_prints(self) -> None:
+        transcript = self.workspace / "captures" / "long.txt"
+        transcript.write_text(
+            "$ tests/retry.sh\n" + "".join(f"attempt {n:02d} settled\n" for n in range(1, 30)),
+            encoding="utf-8",
+        )
+        bundle = self.bundle("page")
+        bundle["claims"][0]["artifacts"] = [{"path": "captures/long.txt", "label": "Retry transcript"}]
+        page = Page(self.page_for(bundle))
+        self.assertIn("Retry transcript (31 lines)", page.source)
+        # Outside `<details>`, so no stylesheet has to reopen a closed element
+        # for the transcript to reach paper.
+        self.assertIn("attempt 29 settled", page.outside_details())
+        self.assertIn(".dis--static > .dis__body{display:none}", page.stylesheet())
+        self.assertIn(".dis--static > details[open] ~ .dis__body{display:block}", page.stylesheet())
+        printed = page.stylesheet().split("@media print{")[1]
+        self.assertIn(".dis--static > .dis__body{display:block}", printed)
+
     def test_the_first_change_is_stated_once(self) -> None:
         page = self.page_for(self.bundle("page"))
         self.assertEqual(1, page.count("Timed-out checkout attempts can now be retried safely."))

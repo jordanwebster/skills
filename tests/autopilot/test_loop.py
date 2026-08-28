@@ -149,6 +149,33 @@ class LoopTests(FlightCase):
         self.assertIn("1.txt", prompt)
         self.assertNotIn("2.txt", prompt, "the range is frozen before dependent work exists")
 
+    def test_an_unrepaired_review_gates_only_the_milestones_that_rest_on_it(self) -> None:
+        plan = toy_plan(
+            [
+                task(1, "foundation"),
+                task(2, "dependent", chunk=2, depends_on=[1]),
+                task(3, "independent", chunk=3),
+            ],
+            chunks=[
+                {"id": 1, "title": "Foundation", "review": True},
+                {"id": 2, "title": "Dependent", "review": False},
+                {"id": 3, "title": "Independent", "review": False},
+            ],
+            config={"max_iterations": 20},
+        )
+        flight = self.seed(plan)
+        self.assertEqual(
+            self.drive(flight, FAKE_REVIEW_FINDINGS="[escalate]", FAKE_TRIAGE_OPERATOR="1"),
+            "escalated",
+        )
+        flight.load()
+        repair = next(item for item in flight.tasks if item["origin"] == "review")
+        self.assertEqual(repair["status"], "blocked")
+        self.assertEqual(flight.task(2)["status"], "todo", "work resting on the milestone waits")
+        self.assertEqual(flight.chunk(2)["status"], "open")
+        self.assertEqual(flight.task(3)["status"], "done", "dependency-safe work still runs")
+        self.assertEqual(flight.chunk(3)["status"], "done")
+
     def test_a_blocked_milestone_does_not_stop_dependency_safe_later_work(self) -> None:
         plan = toy_plan(
             [task(1, "[escalate] foundation"), task(2, "independent", chunk=2)],

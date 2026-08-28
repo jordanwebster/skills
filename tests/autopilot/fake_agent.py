@@ -89,8 +89,15 @@ def review(prompt: str) -> None:
     # Keep what the driver said was under review so a test can check that the
     # range was frozen when the milestone completed, not read at dispatch time.
     (review_dir / f"chunk-{chunk}-prompt.txt").write_text(prompt)
-    if os.environ.get("FAKE_REVIEW_FINDINGS"):
-        autopilot("task", "add", f"Fix review finding in chunk {chunk}", "--done-when", "fixed", "--origin", "review")
+    findings = os.environ.get("FAKE_REVIEW_FINDINGS")
+    if findings:
+        # Any value other than "1" is a marker prefixed to the repair's title,
+        # so a test can script how the repair itself behaves.
+        marker = "" if findings == "1" else f"{findings} "
+        autopilot(
+            "task", "add", f"{marker}Fix review finding in chunk {chunk}",
+            "--done-when", "fixed", "--origin", "review",
+        )
 
 
 def close() -> None:

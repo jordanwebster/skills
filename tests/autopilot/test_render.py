@@ -43,6 +43,23 @@ class MarkdownTests(unittest.TestCase):
         self.assertIn("<strong>bold</strong> and <code>code</code>", html)
         self.assertIn("<pre>\nraw &lt;text&gt;\n</pre>", html)
 
+    def test_a_link_that_would_execute_is_shown_but_never_active(self) -> None:
+        html = render.markdown("[open](javascript:location='https://example.test')\n")
+        self.assertNotIn("<a ", html)
+        self.assertNotIn("href", html)
+        self.assertIn("open", html)
+        self.assertIn("<code>javascript:location=", html, "the reader still sees what it was")
+
+        image = render.markdown("![shot](javascript:alert(1))\n")
+        self.assertNotIn("<img", image)
+        self.assertIn("not a kind the page embeds", image)
+
+    def test_milestone_references_never_rewrite_a_destination_or_nest_a_link(self) -> None:
+        html = render.markdown("- [spec](docs/M1.md) explains M1 before M2\n")
+        self.assertIn("<a href='docs/M1.md'>spec</a>", html)
+        self.assertIn('explains <a href="#m1">M1</a> before <a href="#m2">M2</a>', html)
+        self.assertEqual(1, html.count("docs/M1.md"))
+
     def test_headings_demote_relative_to_their_container(self) -> None:
         text = "# Overview\n\n## Detail\n"
         inside_a_section = render.markdown(text, base_level=2)

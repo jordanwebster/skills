@@ -225,6 +225,60 @@ CAPABILITY_WORDS = ("fast", "offline", "deterministic", "isolated")
 REQUIRED_STAGE_FIELDS = ("produces", "unlocks", "validated by")
 
 
+_SHAPE_GROUP = re.compile(r"^#{3,6}\s+(.+?)\s*$", re.MULTILINE)
+_SHAPE_ENTRY = re.compile(r"^\s*[-*]\s+(.*)$")
+_SHAPE_SPLIT = re.compile(r"\s+(?:—|–|--)\s+")
+# What every Shape must name before the operator can judge a design: the parts,
+# the surfaces between them, and what travels across those surfaces. A plan that
+# names fewer has not said what it intends to build.
+REQUIRED_SHAPE_GROUPS = ("Components", "Interfaces and APIs", "Data shapes")
+
+
+def shape_groups(source: str) -> list[tuple[str, list[tuple[str, str]]]]:
+    """The Shape section as named groups of term-and-definition entries.
+
+    A group is a sub-heading; an entry is a bullet, split on an em dash into
+    the thing and what it is. Groups with no entries are not groups."""
+
+    matches = list(_SHAPE_GROUP.finditer(source))
+    if not matches:
+        return []
+    groups: list[tuple[str, list[tuple[str, str]]]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+        entries: list[tuple[str, str]] = []
+        for line in source[match.end():end].splitlines():
+            entry = _SHAPE_ENTRY.match(line)
+            if not entry:
+                continue
+            parts = _SHAPE_SPLIT.split(entry.group(1), maxsplit=1)
+            if len(parts) == 2:
+                entries.append((parts[0].strip(), parts[1].strip()))
+            else:
+                entries.append((entry.group(1).strip(), ""))
+        if entries:
+            groups.append((match.group(1).strip(), entries))
+    return groups
+
+
+def _shape(source: str | None) -> str:
+    if source is None or not source.strip():
+        raise PlanError(
+            "plan needs a ## Shape section with a "
+            + ", ".join(REQUIRED_SHAPE_GROUPS)
+            + " group"
+        )
+    present = {title.casefold() for title, _ in shape_groups(source)}
+    missing = [name for name in REQUIRED_SHAPE_GROUPS if name.casefold() not in present]
+    if missing:
+        raise PlanError(
+            "## Shape needs a non-empty "
+            + ", ".join(f"### {name}" for name in missing)
+            + " group, each listing entries as `- **thing** — what it is`"
+        )
+    return source
+
+
 def _section_map(text: str) -> dict[str, str]:
     matches = list(_SECTION.finditer(text))
     sections: dict[str, str] = {}
@@ -390,7 +444,7 @@ def _operator_contract(text: str, plan: dict[str, Any]) -> dict[str, Any]:
     return {
         "goal": sections.get("goal", ""),
         "routes": routes,
-        "shape": sections.get("shape", ""),
+        "shape": _shape(sections.get("shape")),
         "human_judgment": sections.get("human judgment", ""),
         "asks": asks,
         "out_of_scope": sections.get("out of scope", ""),

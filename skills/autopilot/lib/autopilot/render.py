@@ -23,6 +23,8 @@ from pathlib import Path
 import re
 from typing import Any, Sequence
 
+from .plan import shape_groups
+
 # Media larger than this is linked rather than inlined: the page must stay
 # something a browser opens instantly and a mail client accepts.
 INLINE_MEDIA_LIMIT = 20 * 1024 * 1024
@@ -171,6 +173,10 @@ details[open] > summary::before{transform:rotate(90deg)}
 background:var(--surface-sunken)}
 .dis__body > :last-child{margin-bottom:0}
 .dis--block{margin-top:-1px;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+/* A disclosure whose body must survive printing keeps that body beside the
+   control rather than inside it; the control's own open state reveals it. */
+.dis--static > .dis__body{display:none}
+.dis--static > details[open] ~ .dis__body{display:block}
 .diagnostics{margin-top:48px}
 
 table{width:100%;border-collapse:collapse;margin:8px 0 16px;
@@ -217,8 +223,11 @@ main{padding-bottom:0}
 .margin p{margin-bottom:4px}
 .row{padding:8px 0}
 .dis--diagnostics{display:none}
-.dis--evidence > summary::before{display:none}
-.dis--evidence > .dis__body{display:block !important}
+/* Printed, a disclosure is not a control: its label stays as a heading for the
+   body below it, and the body is always there. */
+.dis--static summary{cursor:default}
+.dis--static summary::before{display:none}
+.dis--static > .dis__body{display:block}
 .claim,.stage,figure{break-inside:avoid}
 h2{break-after:avoid}
 a{text-decoration:none}
@@ -361,9 +370,21 @@ def decision(
     )
 
 
-def disclosure(summary: str, body: str, *, variant: str = "inline") -> str:
-    """Trusted machinery, reachable and off the surface. Never a decision input."""
+def disclosure(summary: str, body: str, *, variant: str = "inline", static_print: bool = False) -> str:
+    """Trusted machinery, reachable and off the surface. Never a decision input.
 
+    `static_print` keeps the body out of the `<details>` element and reveals it
+    with a sibling rule instead. A closed `<details>` does not render its
+    children at all, so no stylesheet can bring them back for print; content
+    that must survive being printed cannot live inside one. On screen the
+    behaviour is identical: closed until the summary is opened."""
+
+    if static_print:
+        return (
+            f'<div class="dis dis--{html.escape(variant, quote=True)} dis--static">'
+            f'<details><summary>{html.escape(summary)}</summary></details>'
+            f'<div class="dis__body">{body}</div></div>'
+        )
     return (
         f'<details class="dis dis--{html.escape(variant, quote=True)}">'
         f"<summary>{html.escape(summary)}</summary>"
@@ -718,39 +739,13 @@ def _fork(branch: dict[str, Any] | None) -> str:
 
 
 def _shape(source: str, base: Path | None) -> str:
-    """Shape as definition lists, falling back to plain Markdown when untyped."""
+    """Shape as definition lists. The plan contract requires the typed groups,
+    so untyped prose only ever reaches here from an older rendered page."""
 
-    groups = _shape_groups(source)
+    groups = shape_groups(source)
     if groups:
         return definition_block(groups)
     return markdown(source, base=base, base_level=2, caption="Shape")
-
-
-_SHAPE_GROUP = re.compile(r"^#{3,6}\s+(.+?)\s*$", re.MULTILINE)
-_SHAPE_ENTRY = re.compile(r"^\s*[-*]\s+(.*)$")
-_SHAPE_SPLIT = re.compile(r"\s+(?:—|–|--)\s+")
-
-
-def _shape_groups(source: str) -> list[tuple[str, list[tuple[str, str]]]]:
-    matches = list(_SHAPE_GROUP.finditer(source))
-    if not matches:
-        return []
-    groups: list[tuple[str, list[tuple[str, str]]]] = []
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
-        entries: list[tuple[str, str]] = []
-        for line in source[match.end():end].splitlines():
-            entry = _SHAPE_ENTRY.match(line)
-            if not entry:
-                continue
-            parts = _SHAPE_SPLIT.split(entry.group(1), maxsplit=1)
-            if len(parts) == 2:
-                entries.append((parts[0].strip(), parts[1].strip()))
-            else:
-                entries.append((entry.group(1).strip(), ""))
-        if entries:
-            groups.append((match.group(1).strip(), entries))
-    return groups
 
 
 def _intended_proof(
@@ -1113,31 +1108,84 @@ def markdown(
 
 
 _MILESTONE_REFERENCE = re.compile(r"\bM(\d+)\b")
+# A code span or a link, matched together so each is recognised in the authored
+# text rather than in generated markup: a destination is never prose, and prose
+# is never re-read as markup once it has become a tag.
+_INLINE_SPAN = re.compile(r"`[^`]+`|!?\[[^\]]*\]\([^)\s]+\)")
+_LINK = re.compile(r"^(!?)\[([^\]]*)\]\(([^)\s]+)\)$")
+# Anything before a colon that a browser would read as a scheme. A relative
+# path never matches, because a path separator cannot appear in a scheme.
+_SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*):")
+# Schemes a page may link to. `javascript:` and its relatives execute, and a
+# page that is mailed, printed, and read cold is exactly where a link nobody
+# audited must not be able to act, so an unlisted scheme is shown, not linked.
+LINK_SCHEMES = ("http", "https", "mailto")
+# Media the page can embed and still be self-contained: a remote source is
+# named rather than fetched, and a data URI is already inert bytes.
+MEDIA_SCHEMES = ("http", "https", "data")
 
 
-def _inline(text: str, base: Path | None = None) -> str:
+def _scheme(target: str) -> str | None:
+    match = _SCHEME.match(target.strip())
+    return match.group(1).casefold() if match else None
+
+
+def _linkable(target: str) -> bool:
+    """A relative path, a fragment, or a scheme that cannot execute."""
+
+    scheme = _scheme(target)
+    return scheme is None or scheme in LINK_SCHEMES
+
+
+def _prose(text: str) -> str:
+    """Authored words: escaped, emphasised, and cross-referenced."""
+
     escaped = html.escape(text, quote=False)
-    escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
-    escaped = re.sub(
-        r"!\[([^\]]*)\]\(([^)\s]+)\)",
-        lambda match: _media(match.group(1), match.group(2), base),
-        escaped,
-    )
-    escaped = re.sub(
-        r"\[([^\]]+)\]\(([^)\s]+)\)",
-        lambda match: f"<a href='{html.escape(match.group(2), quote=True)}'>{match.group(1)}</a>",
-        escaped,
-    )
     return _MILESTONE_REFERENCE.sub(
         lambda match: f'<a href="#m{match.group(1)}">M{match.group(1)}</a>', escaped
     )
+
+
+def _label(text: str) -> str:
+    """A link's own words. A milestone reference inside one would nest an
+    anchor in an anchor, so cross-referencing stops at the boundary."""
+
+    return re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", html.escape(text, quote=False))
+
+
+def _inline(text: str, base: Path | None = None) -> str:
+    out: list[str] = []
+    position = 0
+    for span in _INLINE_SPAN.finditer(text):
+        out.append(_prose(text[position:span.start()]))
+        position = span.end()
+        source = span.group(0)
+        link = _LINK.match(source)
+        if link is None:
+            out.append(f"<code>{html.escape(source[1:-1], quote=False)}</code>")
+            continue
+        bang, label, target = link.group(1), link.group(2), link.group(3)
+        if bang:
+            out.append(_media(label, target, base))
+        elif _linkable(target):
+            out.append(f"<a href='{html.escape(target, quote=True)}'>{_label(label)}</a>")
+        else:
+            out.append(f"{_label(label)} <code>{html.escape(target, quote=False)}</code>")
+    out.append(_prose(text[position:]))
+    return "".join(out)
 
 
 def _media(alt: str, target: str, base: Path | None) -> str:
     """An image or video, inlined as a data URI so the page ships alone."""
 
     caption = f"<figcaption>{html.escape(alt)}</figcaption>" if alt else ""
+    scheme = _scheme(target)
+    if scheme is not None and scheme not in MEDIA_SCHEMES:
+        return (
+            f'<p class="missing">Media source is not a kind the page embeds: '
+            f"<code>{html.escape(target)}</code></p>"
+        )
     path = Path(target)
     if not path.is_absolute() and base is not None:
         path = base / path

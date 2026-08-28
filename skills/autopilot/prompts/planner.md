@@ -31,7 +31,9 @@ and the blast radius if the default is wrong.
   not exist.
 - **Shape.** The components, the interfaces and APIs they expose, the
   data shapes that cross them, and where each lives. This is where design
-  smells get caught — be concrete enough to be wrong.
+  smells get caught — be concrete enough to be wrong. All three groups are
+  required, under the sub-headings the template uses, each with at least one
+  entry; a plan missing one is rejected.
 - **Proof.** In the machine evidence block, explicit coverage for every accepted demonstration ID copied exactly from `acceptance.json`: the evidence that will show it working
   where a user would see it (a screenshot or recording for anything
   visual, a transcript for a command, a before/after pair for data, a

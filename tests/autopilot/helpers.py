@@ -49,7 +49,10 @@ def plan_markdown(plan: dict) -> str:
     return (
         "# Toy plan\n\n## Goal\n\nBuild the toy.\n\n**Done means:** The toy is observable.\n\n"
         "## Route\n\n" + "\n".join(routes) + "\n"
-        "## Shape\n\n- **Toy** — owns the result.\n\n"
+        "## Shape\n\n"
+        "### Components\n\n- **Toy** — owns the result, lives in `toy/`.\n\n"
+        "### Interfaces and APIs\n\n- `toy()` — returns the result, never raises.\n\n"
+        "### Data shapes\n\n- **Result** — the text the toy produced.\n\n"
         "## Human judgment\n\nConfirm the result is useful.\n\n"
         "## What you will be asked\n\n"
         "| Act | When | Default | Exposure |\n| --- | --- | --- | --- |\n"
