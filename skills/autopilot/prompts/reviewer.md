@@ -28,8 +28,9 @@ sections:
   promises: does the screenshot or transcript show what the plan's proof
   table says it should? A promise with no capture where the plan required
   one is a must-fix.
-- There is one fix round. What you do not file now is recorded for the
-  completion page, not raised again.
+- Review this bounded milestone once and file all must-fixes you can
+  substantiate. Repairs are checked before dependent work proceeds; optional
+  observations are recorded rather than repeatedly reopened.
 
 ## Rules of the road
 

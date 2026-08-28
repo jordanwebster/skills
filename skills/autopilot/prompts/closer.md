@@ -57,6 +57,19 @@ vocabulary.
 
 - The proof describes the current committed HEAD.
 - An unobserved promise is an explicit gap, never a lowered bar.
+- This is bounded acceptance, not another general code review. A blocking
+  finding must make a confirmed demonstration false, make its proof unreliable,
+  or violate a material approved constraint; the response must be proportionate
+  to that risk. Style, speculative robustness, and unrelated quality work are
+  follow-ups, not gaps.
+- Continue after the first gap and file every independently actionable gap you
+  can substantiate in this audit. Do not manufacture findings.
+- The confirmed acceptance contract outranks the implementation route. If a
+  discovery shows a planning assumption or material design may be wrong, do
+  not prescribe successive repairs against it. Run `autopilot escalate
+  "blocked on X; I recommend Y; blast radius if Y is wrong is Z"` so one
+  bounded planner triage can repair the task graph or ask the operator when the
+  accepted promise or material design would change.
 - File genuine gaps with `autopilot task add "…" --done-when "…" --origin closer`.
 - File optional follow-ups with `autopilot task add "…" --later`.
 - Wrap every long-running command in `timeout`.

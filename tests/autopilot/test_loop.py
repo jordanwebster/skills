@@ -124,7 +124,91 @@ class LoopTests(FlightCase):
         origins = sorted(t["origin"] for t in flight.tasks)
         self.assertEqual(origins, ["closer", "plan", "review"])
         self.assertTrue(all(t["status"] == "done" for t in flight.tasks))
-        self.assertEqual(flight.data["closer_rounds"], 2)
+        self.assertEqual(len(flight.data["acceptance_audits"]), 2)
+        self.assertEqual(len(flight.data["acceptance_audits"][0]["gap_task_ids"]), 1)
+
+    def test_milestone_review_and_repairs_precede_later_implementation(self) -> None:
+        plan = toy_plan(
+            [task(1, "foundation"), task(2, "dependent", chunk=2, depends_on=[1])],
+            chunks=[
+                {"id": 1, "title": "Foundation", "review": True},
+                {"id": 2, "title": "Dependent", "review": False},
+            ],
+            config={"max_iterations": 20},
+        )
+        flight = self.seed(plan)
+        self.assertEqual(self.drive(flight, FAKE_REVIEW_FINDINGS="1"), "landed")
+        flight.load()
+        repair = next(task for task in flight.tasks if task["origin"] == "review")
+        events = "\n".join(flight.recent_events(100))
+        self.assertLess(events.index(f"task {repair['id']} done"), events.index("task 2 done"))
+        frozen = flight.chunk(1)["completion_head"]
+        self.assertTrue(frozen)
+        prompt = (flight.dir / "reviews" / "chunk-1-prompt.txt").read_text()
+        self.assertIn(f"Commit range: {flight.data['base'][:12]}..{frozen[:12]}", prompt)
+        self.assertIn("1.txt", prompt)
+        self.assertNotIn("2.txt", prompt, "the range is frozen before dependent work exists")
+
+    def test_a_blocked_milestone_does_not_stop_dependency_safe_later_work(self) -> None:
+        plan = toy_plan(
+            [task(1, "[escalate] foundation"), task(2, "independent", chunk=2)],
+            chunks=[
+                {"id": 1, "title": "Foundation", "review": False},
+                {"id": 2, "title": "Independent", "review": False},
+            ],
+            config={"max_iterations": 20},
+        )
+        flight = self.seed(plan)
+        self.assertEqual(self.drive(flight, FAKE_TRIAGE_OPERATOR="1"), "escalated")
+        flight.load()
+        self.assertEqual(flight.task(1)["status"], "blocked")
+        self.assertEqual(flight.task(2)["status"], "done", "approved later work still proceeds")
+        self.assertEqual(flight.chunk(2)["status"], "done")
+        self.assertEqual(flight.chunk(1)["status"], "open")
+
+    def test_acceptance_can_converge_after_more_than_two_real_gap_audits(self) -> None:
+        flight = self.seed(toy_plan([task(1, "first")], config={"max_iterations": 20}))
+        self.assertEqual(self.drive(flight, FAKE_CLOSER_GAPS="3"), "landed")
+        flight.load()
+        self.assertEqual(len(flight.data["acceptance_audits"]), 4)
+        self.assertEqual(
+            [len(audit["gap_task_ids"]) for audit in flight.data["acceptance_audits"]],
+            [1, 1, 1, 0],
+        )
+
+    def test_evidence_only_repair_reopens_acceptance_without_a_commit(self) -> None:
+        flight = self.seed(toy_plan([task(1, "first")], config={"max_iterations": 12}))
+        self.assertEqual(self.drive(flight, FAKE_CLOSER_EVIDENCE_GAP="1"), "landed")
+        flight.load()
+        audits = flight.data["acceptance_audits"]
+        self.assertEqual(len(audits), 2)
+        self.assertEqual(audits[0]["head"], audits[1]["head"])
+        self.assertTrue((flight.dir / "evidence" / "refreshed.txt").is_file())
+
+    def test_invalid_proof_bundle_becomes_a_gap_of_that_audit(self) -> None:
+        flight = self.seed(toy_plan([task(1, "first")], config={"max_iterations": 12}))
+        self.assertEqual(self.drive(flight, FAKE_CLOSER_BAD_PROOF="1"), "landed")
+        flight.load()
+        proof_task = next(task for task in flight.tasks if task["title"] == "Complete the decision-ready proof bundle")
+        self.assertIn(proof_task["id"], flight.data["acceptance_audits"][0]["gap_task_ids"])
+
+    def test_closer_routes_a_false_plan_assumption_through_bounded_triage(self) -> None:
+        flight = self.seed(toy_plan([task(1, "first")], config={"max_iterations": 12}))
+        self.assertEqual(
+            self.drive(flight, FAKE_CLOSER_TRIAGE="1", FAKE_TRIAGE_CLOSE_RESOLVE="1"),
+            "landed",
+        )
+        flight.load()
+        self.assertEqual(len(flight.data["acceptance_audits"][0]["decision_ids"]), 1)
+        self.assertEqual(flight.escalation(1)["state"], "resolved")
+        self.assertIsNone(flight.escalation(1)["answer"])
+
+    def test_parked_acceptance_gap_cannot_silently_land(self) -> None:
+        flight = self.seed(toy_plan([task(1, "first")], config={"max_iterations": 12}))
+        self.assertEqual(self.drive(flight, FAKE_CLOSER_PARKED_GAP="1"), "escalated")
+        flight.load()
+        self.assertFalse((flight.handoff_dir / "proof.json").exists())
+        self.assertIn("Acceptance gap", flight.open_escalations()[0]["text"])
 
     def test_no_progress_hits_cap_then_replans(self) -> None:
         plan = toy_plan([task(1, "[stall] first")])

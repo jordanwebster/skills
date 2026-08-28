@@ -113,16 +113,16 @@ class Driver:
                     f"without completing. Another attempt is not an option.",
                 )
                 continue
-            task = flight.next_task()
-            if task is not None:
-                self._iterate(task)
-                continue
             chunk = next(
                 (item for item in flight.chunks if item["status"] == "open" and flight.chunk_complete(item)),
                 None,
             )
             if chunk is not None:
                 self._complete_chunk(chunk)
+                continue
+            task = flight.next_task()
+            if task is not None:
+                self._iterate(task)
                 continue
             if flight.open_escalations():
                 self._end("escalated", "waiting on the operator")
@@ -295,6 +295,9 @@ class Driver:
 
     def _complete_chunk(self, chunk: dict[str, Any]) -> None:
         flight = self.flight
+        if chunk.get("completion_head") is None:
+            chunk["completion_head"] = gitops.head(flight.root)
+            flight.save()
         if chunk.get("check"):
             passed, output = dispatch.run_check(
                 chunk["check"], cwd=flight.root, timeout=flight.config["check_timeout"]
@@ -310,6 +313,7 @@ class Driver:
                         origin="autopilot",
                         notes=f"Verification output:\n{output[-1500:]}",
                     )
+                    chunk["completion_head"] = None
                     flight.event(f"chunk {chunk['id']}: verification failed; filed a fix task")
                 else:
                     decision = flight.add_escalation(
@@ -326,10 +330,11 @@ class Driver:
             chunk["reviewed"] = True
             flight.save()
             base = chunk.get("base") or flight.data["base"]
+            target = chunk.get("completion_head") or gitops.head(flight.root)
             ids_before = {task["id"] for task in flight.tasks}
             outcome = self._dispatch(
                 "reviewer",
-                prompt.reviewer_prompt(flight, chunk, base=base),
+                prompt.reviewer_prompt(flight, chunk, base=base, target=target),
                 effort=chunk.get("review_effort"),
                 summary=f"chunk {chunk['id']} review",
                 extra_env={"AUTOPILOT_CHUNK": str(chunk["id"])},
@@ -358,6 +363,23 @@ class Driver:
 
     def _close_flight(self) -> None:
         flight = self.flight
+        parked_gaps = [
+            flight.task(task_id)
+            for audit in flight.data.get("acceptance_audits", [])
+            for task_id in audit.get("gap_task_ids", [])
+            if flight.task(task_id)["status"] == "parked"
+        ]
+        if parked_gaps:
+            ids = ", ".join(str(task["id"]) for task in parked_gaps)
+            decision = flight.add_escalation(
+                None,
+                f"Acceptance gap task(s) {ids} were parked. Reconsider whether the approved plan "
+                "can still meet the confirmed promise; do not silently land with an acceptance gap.",
+                pending_triage=True,
+            )
+            flight.event(f"decision #{decision['id']} queued after acceptance work was parked")
+            flight.save()
+            return
         check_result = None
         if flight.config.get("check"):
             passed, output = dispatch.run_check(
@@ -390,18 +412,9 @@ class Driver:
                 flight.event(f"decision #{decision['id']} queued after whole-flight verification kept failing")
                 flight.save()
                 return
-        if flight.data["closer_rounds"] >= 2:
-            flight.add_escalation(
-                None,
-                "The closer found gaps against the requirements twice. The plan, not the code, "
-                "is probably wrong: decide whether to land as-is, answer with new scope, or stop.",
-            )
-            flight.save()
-            self._end("escalated", "acceptance found gaps twice")
-            return
-        flight.data["closer_rounds"] += 1
-        flight.save()
+        audited_head = gitops.head(flight.root)
         ids_before = {task["id"] for task in flight.tasks}
+        decisions_before = {item["id"] for item in flight.escalations}
         outcome = self._dispatch(
             "closer",
             prompt.closer_prompt(flight, check_result=check_result),
@@ -409,19 +422,31 @@ class Driver:
         )
         flight.load()
         if outcome.exit_class == dispatch.EXIT_CONFIG:
-            flight.data["closer_rounds"] -= 1
-            flight.save()
             self._config(outcome)
             return
         if outcome.exit_class == dispatch.EXIT_INFRA:
-            flight.data["closer_rounds"] -= 1
-            flight.save()
             self._infra(outcome)
             return
         self.infra_streak = 0
         gaps = [task for task in flight.tasks if task["id"] not in ids_before and task["status"] == "todo"]
+        audit = {
+            "number": len(flight.data.setdefault("acceptance_audits", [])) + 1,
+            "head": audited_head,
+            "gap_task_ids": [task["id"] for task in gaps],
+            "decision_ids": [
+                item["id"] for item in flight.pending_triage() if item["id"] not in decisions_before
+            ],
+        }
+        flight.data["acceptance_audits"].append(audit)
+        if audit["decision_ids"]:
+            flight.event(
+                f"acceptance audit {audit['number']}: closer referred {len(audit['decision_ids'])} "
+                "plan question(s) to internal triage"
+            )
+            flight.save()
+            return
         if gaps:
-            flight.event(f"acceptance: closer filed {len(gaps)} gap task(s)")
+            flight.event(f"acceptance audit {audit['number']}: closer filed {len(gaps)} gap task(s)")
             flight.save()
             return
         result = landing.finish(
@@ -430,14 +455,15 @@ class Driver:
             environment=self.environment,
         )
         if not result.ok:
-            flight.add_task(
+            proof_task = flight.add_task(
                 "Complete the decision-ready proof bundle",
                 chunk=flight.chunks[-1]["id"],
                 done_when="Handoff validates the page-mode proof bundle at the current commit",
                 origin="closer",
                 notes=f"Handoff validation: {result.detail}. {result.recovery or ''}".strip(),
             )
-            flight.event(f"acceptance: proof bundle rejected — {result.detail}")
+            audit["gap_task_ids"].append(proof_task["id"])
+            flight.event(f"acceptance audit {audit['number']}: proof bundle rejected — {result.detail}")
             flight.save()
             return
         flight.data["status"] = "landed"

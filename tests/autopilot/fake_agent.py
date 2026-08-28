@@ -60,6 +60,15 @@ def work() -> None:
             autopilot("escalate", str(task["id"]), finding)
             continue
         autopilot("task", "start", str(task["id"]))
+        if "[park-gap]" in title:
+            autopilot("task", "park", str(task["id"]), "the scripted acceptance repair cannot complete")
+            continue
+        if "[evidence-only]" in title:
+            evidence = ROOT / ".autopilot" / "evidence"
+            evidence.mkdir(exist_ok=True)
+            (evidence / "refreshed.txt").write_text("fresh\n")
+            autopilot("task", "done", str(task["id"]))
+            continue
         if "[fail-once]" in title and task["attempts"] == 0:
             autopilot("task", "note", str(task["id"]), "stopped halfway through")
             return
@@ -72,19 +81,47 @@ def work() -> None:
     notes.write_text(notes.read_text() + f"- {ROLE} ran\n")
 
 
-def review() -> None:
+def review(prompt: str) -> None:
     chunk = os.environ["AUTOPILOT_CHUNK"]
     review_dir = ROOT / ".autopilot" / "reviews"
     review_dir.mkdir(exist_ok=True)
     (review_dir / f"chunk-{chunk}.md").write_text("# Review\n\n## Must fix\n\nnone\n")
+    # Keep what the driver said was under review so a test can check that the
+    # range was frozen when the milestone completed, not read at dispatch time.
+    (review_dir / f"chunk-{chunk}-prompt.txt").write_text(prompt)
     if os.environ.get("FAKE_REVIEW_FINDINGS"):
         autopilot("task", "add", f"Fix review finding in chunk {chunk}", "--done-when", "fixed", "--origin", "review")
 
 
 def close() -> None:
-    gaps = os.environ.get("FAKE_CLOSER_GAPS") and flight()["closer_rounds"] == 1
-    if gaps:
-        autopilot("task", "add", "Close the acceptance gap", "--done-when", "closed", "--origin", "closer")
+    audit_count = len(flight().get("acceptance_audits", []))
+    if os.environ.get("FAKE_CLOSER_TRIAGE") and audit_count == 0:
+        autopilot(
+            "escalate",
+            "blocked on a false planning assumption; I recommend re-evaluating the route; "
+            "blast radius is the final implementation detail",
+        )
+        return
+    if os.environ.get("FAKE_CLOSER_BAD_PROOF") and audit_count == 0:
+        return
+    if os.environ.get("FAKE_CLOSER_EVIDENCE_GAP") and audit_count == 0:
+        autopilot(
+            "task", "add", "[evidence-only] Refresh accepted evidence",
+            "--done-when", "the evidence is current", "--origin", "closer",
+        )
+        return
+    if os.environ.get("FAKE_CLOSER_PARKED_GAP") and audit_count == 0:
+        autopilot(
+            "task", "add", "[park-gap] Repair an unresolvable acceptance gap",
+            "--done-when", "the accepted result is true", "--origin", "closer",
+        )
+        return
+    requested_gaps = int(os.environ.get("FAKE_CLOSER_GAPS", "0") or 0)
+    if audit_count < requested_gaps:
+        autopilot(
+            "task", "add", f"Close acceptance gap {audit_count + 1}",
+            "--done-when", "closed", "--origin", "closer"
+        )
         return
     workspace = ROOT / ".autopilot" / "handoff"
     evidence = workspace / "evidence"
@@ -144,6 +181,12 @@ def triage() -> None:
     decision = next(item for item in state["escalations"] if item["id"] == int(decision_id))
     if os.environ.get("FAKE_TRIAGE_STALL"):
         return
+    if decision["task"] is None and os.environ.get("FAKE_TRIAGE_CLOSE_RESOLVE"):
+        autopilot(
+            "triage", decision_id, "--resolve",
+            "Reconsidered the obsolete assumption; the accepted promise and material design remain unchanged.",
+        )
+        return
     if os.environ.get("FAKE_TRIAGE_OPERATOR") or decision["task"] is None:
         autopilot(
             "triage",
@@ -182,7 +225,7 @@ def main() -> int:
         print("unknown option --obsolete-effort")
         return 2
     if ROLE == "reviewer":
-        review()
+        review(prompt)
     elif ROLE == "closer":
         close()
     elif ROLE == "planner" and os.environ.get("AUTOPILOT_TRIAGE_ID"):

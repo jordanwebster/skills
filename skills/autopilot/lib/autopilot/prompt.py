@@ -124,7 +124,7 @@ def commands_block(role: str) -> str:
     )
 
 
-def reviewer_prompt(flight: Flight, chunk: dict[str, Any], *, base: str) -> str:
+def reviewer_prompt(flight: Flight, chunk: dict[str, Any], *, base: str, target: str) -> str:
     from .gitops import diff_stat, log_oneline
 
     parts = [header(flight, "reviewer"), role_prompt("reviewer"), ""]
@@ -132,16 +132,16 @@ def reviewer_prompt(flight: Flight, chunk: dict[str, Any], *, base: str) -> str:
         "## The chunk under review",
         "",
         f"Chunk {chunk['id']}: {chunk['title']}",
-        f"Commit range: {base[:12]}..HEAD  (run `git diff {base[:12]}..HEAD` to read it)",
+        f"Commit range: {base[:12]}..{target[:12]}  (run `git diff {base[:12]}..{target[:12]}` to read it)",
         "",
         "Commits:",
         "```",
-        log_oneline(flight.root, base).strip() or "(none)",
+        log_oneline(flight.root, base, target).strip() or "(none)",
         "```",
         "",
         "Files:",
         "```",
-        diff_stat(flight.root, base).strip() or "(no changes)",
+        diff_stat(flight.root, base, target).strip() or "(no changes)",
         "```",
         "",
         "Tasks in this chunk:",

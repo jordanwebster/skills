@@ -96,6 +96,11 @@ class Flight:
             raise StateError(f"flight state at {self.path} is unreadable: {error}") from error
         if self.data.get("schema") != SCHEMA_VERSION:
             raise StateError("flight state has an unsupported schema version")
+        # These fields were added without a schema break so an active flight
+        # can resume after upgrading the skill.
+        self.data.setdefault("acceptance_audits", [])
+        for chunk in self.data.get("chunks", []):
+            chunk.setdefault("completion_head", None)
         return self
 
     def save(self) -> None:
@@ -123,7 +128,7 @@ class Flight:
             "tasks": [],
             "escalations": [],
             "iteration": 0,
-            "closer_rounds": 0,
+            "acceptance_audits": [],
             "dispatches": [],
             "failure": None,
         }
@@ -211,6 +216,7 @@ class Flight:
             "review": bool(review),
             "status": "open",
             "base": None,
+            "completion_head": None,
             "reviewed": False,
             "fix_rounds": 0,
         }

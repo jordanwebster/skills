@@ -20,6 +20,12 @@ capture mechanics normally belong here when they meet that bar. Repair the
 task graph first, record useful rationale in task notes, then use
 `autopilot triage ID --resolve "…"`.
 
+When the closer referred the decision, first decide whether it is a real
+acceptance gap, an obsolete planning assumption, or optional work. Reconsider
+prior assumptions rather than treating the approved plan as infallible. You
+may reshape the task graph when the accepted promise and material design stay
+fixed; do not edit the approved plan after takeoff.
+
 Promote when operator judgment is genuinely required: an accepted promise or
 exclusion would change, new authority or meaningful external consequence is
 needed, a destructive or difficult-to-reverse action is proposed, approved

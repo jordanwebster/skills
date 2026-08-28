@@ -38,7 +38,24 @@ def make_repo(root: Path) -> None:
 
 
 def plan_markdown(plan: dict) -> str:
-    return "# Toy plan\n\n## Goal\n\nBuild the toy.\n\n```flight-plan\n" + json.dumps(plan, indent=2) + "\n```\n"
+    routes = []
+    for chunk in plan["chunks"]:
+        routes.append(
+            f"### Milestone {chunk['id']} — {chunk['title']}\n\n"
+            f"- **Produces:** The {chunk['title']} result.\n"
+            f"- **Unlocks:** The next planned boundary.\n"
+            f"- **Validated by:** A fast deterministic boundary check.\n"
+        )
+    return (
+        "# Toy plan\n\n## Goal\n\nBuild the toy.\n\n**Done means:** The toy is observable.\n\n"
+        "## Route\n\n" + "\n".join(routes) + "\n"
+        "## Shape\n\n- **Toy** — owns the result.\n\n"
+        "## Human judgment\n\nConfirm the result is useful.\n\n"
+        "## What you will be asked\n\n"
+        "| Act | When | Default | Exposure |\n| --- | --- | --- | --- |\n"
+        "| Approve this route | Now | Nothing starts | Planned flight |\n\n"
+        "```flight-plan\n" + json.dumps(plan, indent=2) + "\n```\n"
+    )
 
 
 def toy_plan(tasks: list[dict], *, chunks: list[dict] | None = None, config: dict | None = None) -> dict:
@@ -55,8 +72,9 @@ def toy_plan(tasks: list[dict], *, chunks: list[dict] | None = None, config: dic
             {
                 "id": "toy-result",
                 "claim": "The toy works",
-                "demonstrations": ["The toy result is visible"],
+                "demonstrations": ["toy-result"],
                 "artifacts": ["evidence/toy.txt"],
+                "stages": [1],
                 "replay": {"kind": "command", "command": "test -f 1.txt"},
             }
         ],
@@ -116,7 +134,12 @@ class FlightCase(unittest.TestCase):
             }
         )
         self.roster = Roster(environment=self.env)
-        for name in ("FAKE_REVIEW_FINDINGS", "FAKE_CLOSER_GAPS", "FAKE_INFRA", "FAKE_CONFIG", "FAKE_SLEEP"):
+        for name in (
+            "FAKE_REVIEW_FINDINGS", "FAKE_CLOSER_GAPS", "FAKE_CLOSER_TRIAGE",
+            "FAKE_CLOSER_BAD_PROOF", "FAKE_CLOSER_EVIDENCE_GAP",
+            "FAKE_CLOSER_PARKED_GAP", "FAKE_TRIAGE_CLOSE_RESOLVE",
+            "FAKE_INFRA", "FAKE_CONFIG", "FAKE_SLEEP",
+        ):
             self.env.pop(name, None)
 
     def seed(self, plan: dict, *, approve: bool = True) -> Flight:
