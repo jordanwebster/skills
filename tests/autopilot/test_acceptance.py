@@ -58,6 +58,15 @@ class AcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(acceptance.AcceptanceError, "renamed: Streaming updates are visible"):
             acceptance.verify_proof(self.inspection, self.workspace)
 
+    def test_plan_evidence_uses_exact_confirmed_demonstration_ids(self) -> None:
+        inspection = acceptance.load(self.inspection)
+        plan = {"evidence": [{"demonstrations": ["streaming", "completion"]}]}
+        acceptance.verify_plan(inspection, plan)
+
+        plan["evidence"][0]["demonstrations"] = ["Streaming updates are visible."]
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "missing: Streaming updates are visible"):
+            acceptance.verify_plan(inspection, plan)
+
 
 if __name__ == "__main__":
     unittest.main()

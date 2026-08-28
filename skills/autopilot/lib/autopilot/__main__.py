@@ -17,7 +17,7 @@ from typing import Any
 from . import acceptance, approval, gitops, preflight, prompt, render, supervise
 from .dispatch import run_agent
 from .loop import Driver
-from .plan import PlanError, read_plan, seed_flight
+from .plan import PlanError, plan_blocks, read_plan, seed_flight
 from .roster import Roster, RosterError
 from .state import Flight, StateError
 
@@ -346,6 +346,7 @@ def cmd_approve(args: argparse.Namespace) -> int:
         raise StateError("the flight has already started; its seeded plan cannot be reapproved in place")
     plan = read_plan(flight.plan_path)
     inspection = acceptance.inspect(flight.requirements_path, flight.acceptance_receipt_path)
+    acceptance.verify_plan(inspection, plan)
     receipt = approval.approve(flight, plan, Roster())
     acceptance.write(flight.acceptance_path, inspection)
     flight.event("current plan and semantic staffing approved")
@@ -364,8 +365,16 @@ def _render_plan(flight: Flight) -> Path:
     staffing, _ = approval.resolved_staffing(plan, Roster())
     text = flight.plan_path.read_text(encoding="utf-8")
     title, body = render.split_title(text, default=f"Flight plan: {flight.data['goal']}")
+    acceptance_data = None
+    if flight.acceptance_path.is_file():
+        acceptance_data = json.loads(flight.acceptance_path.read_text(encoding="utf-8"))
+        acceptance.verify_plan(acceptance_data, plan)
     flight.plan_page_path.write_text(
-        render.flight_plan(body, plan, title=title, base=flight.dir, staffing=staffing),
+        render.flight_plan(
+            body, plan, title=title, base=flight.dir, staffing=staffing,
+            acceptance=acceptance_data,
+            meta=render.meta_line(flight.root.name, flight.data["branch"], render.today()),
+        ),
         encoding="utf-8",
     )
     return flight.plan_page_path
@@ -441,8 +450,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         _open_in_browser(target)
     print(f"Goal: {payload['goal']}")
     progress = payload["progress"]
-    visible_state = payload["readiness"]["state"] if payload["status"] == "planned" else payload["status"]
-    print(f"Progress: {progress['milestones_done']}/{progress['milestones_total']} milestones · {visible_state}")
+    print(f"Progress: {progress['milestones_done']}/{progress['milestones_total']} milestones · {payload['phase']}")
     print(f"Driver: {payload['driver']['health']} — {payload['driver']['summary']}")
     if payload["current_work"]:
         print("Current: " + "; ".join(item["title"] for item in payload["current_work"]))
@@ -473,29 +481,31 @@ def _status_payload(flight: Flight, driver: Any) -> dict[str, Any]:
             "command": f"autopilot answer {questions[0]['id']} \"…\"",
         }
     elif isinstance(failure, dict) and failure.get("class") == "config":
-        next_action = {"kind": "repair_config", "text": str(failure.get("recovery") or "repair configuration, then restart.")}
+        next_action = {"kind": "repair_config", "text": str(failure.get("recovery") or "repair configuration, then restart."), "command": "delegate doctor"}
     elif readiness["state"] == "needs_plan":
         next_action = {"kind": "write_plan", "text": "dispatch the planner.", "command": "autopilot plan --dispatch"}
     elif readiness["state"] == "invalid_plan":
-        next_action = {"kind": "repair_plan", "text": readiness["recovery"]}
+        next_action = {"kind": "repair_plan", "text": readiness["recovery"], "command": "autopilot plan"}
     elif readiness["state"] == "needs_approval":
         next_action = {"kind": "approve", "text": "review the plan and approve it.", "command": "autopilot plan"}
     elif readiness["state"] == "stale_approval":
         next_action = {"kind": "reapprove", "text": readiness["recovery"], "command": "autopilot approve"}
     elif readiness["state"] == "blocked_configuration":
-        next_action = {"kind": "repair_config", "text": readiness["recovery"]}
+        next_action = {"kind": "repair_config", "text": readiness["recovery"], "command": "delegate doctor"}
     elif flight.data["status"] == "exhausted":
-        next_action = {"kind": "review_exhaustion", "text": "review the exhausted flight and decide whether to start a revised one."}
+        next_action = {"kind": "review_exhaustion", "text": "review the exhausted flight before deciding whether to continue.", "command": "autopilot status --json"}
     elif flight.data["status"] == "stopped" or (flight.data["status"] == "running" and not driver.alive):
         next_action = {"kind": "restart", "text": "restart the flight.", "command": "autopilot start"}
     elif readiness["state"] == "ready_to_start":
         next_action = {"kind": "start", "text": "start the flight.", "command": "autopilot start"}
     else:
         next_action = {"kind": "none", "text": "nothing needed."}
+    phase = _flight_phase(flight, active=active, questions=questions, readiness=readiness)
     return {
         "schema_version": 1,
         "goal": flight.data["goal"],
         "status": flight.data["status"],
+        "phase": phase,
         "readiness": readiness,
         "progress": {
             "milestones_done": sum(chunk["status"] == "done" for chunk in flight.chunks),
@@ -519,9 +529,46 @@ def _status_payload(flight: Flight, driver: Any) -> dict[str, Any]:
                 for item in flight.pending_triage()
             ],
             "dispatches": flight.data.get("dispatches", []),
+            "acceptance_audits": flight.data.get("acceptance_audits", []),
             "recent_events": flight.recent_events(20),
         },
     }
+
+
+def _flight_phase(
+    flight: Flight,
+    *,
+    active: list[dict[str, Any]],
+    questions: list[dict[str, Any]],
+    readiness: dict[str, Any],
+) -> str:
+    if questions or flight.data["status"] in ("escalated", "exhausted"):
+        return "needs operator"
+    if flight.data["status"] == "planned":
+        return readiness["state"].replace("_", " ")
+    if flight.data["status"] == "landed":
+        return "proof ready"
+    acceptance_work = [
+        task for task in flight.tasks
+        if task["status"] in ("todo", "doing", "blocked")
+        and (task.get("origin") == "closer" or task["title"] == "Make the whole-flight verification pass")
+    ]
+    if acceptance_work:
+        return "repairing acceptance"
+    review_work = [
+        task for task in flight.tasks
+        if task["status"] in ("todo", "doing", "blocked") and task.get("origin") == "review"
+    ]
+    if review_work:
+        return f"repairing milestone {review_work[0]['chunk']}"
+    for chunk in flight.chunks:
+        if chunk["status"] == "open" and flight.chunk_complete(chunk) and chunk.get("review") and not chunk.get("reviewed"):
+            return f"reviewing milestone {chunk['id']}"
+    if flight.chunks and all(chunk["status"] == "done" for chunk in flight.chunks):
+        return "acceptance audit"
+    if active:
+        return "implementing"
+    return "implementing"
 
 
 def _prestart_readiness(flight: Flight) -> dict[str, str]:
@@ -802,18 +849,44 @@ def cmd_land(args: argparse.Namespace) -> int:
 def cmd_page(args: argparse.Namespace) -> int:
     source: Path = args.markdown
     try:
-        body = source.read_text(encoding="utf-8")
+        text = source.read_text(encoding="utf-8")
     except OSError as error:
         raise StateError(f"cannot read {source}: {error}") from error
-    title, body = render.split_title(body, default=args.title or source.stem.replace("-", " "))
+    title, body = render.split_title(text, default=args.title or source.stem.replace("-", " "))
     if args.title:
         title = args.title
     out = args.out or source.with_suffix(".html")
-    out.write_text(render.page(title, body, base=source.resolve().parent), encoding="utf-8")
+    if plan_blocks(text):
+        parsed = read_plan(source)
+        document = render.flight_plan(
+            body, parsed, title=title, base=source.resolve().parent,
+            meta=_repository_meta(source.resolve().parent),
+        )
+    else:
+        document = render.page(title, body, base=source.resolve().parent)
+    out.write_text(document, encoding="utf-8")
     print(f"Wrote {out}")
     if not args.no_open:
         _open_in_browser(out)
     return 0
+
+
+def _repository_meta(directory: Path) -> str:
+    """The masthead's derived line for a plan rendered outside a flight."""
+
+    name = branch = ""
+    toplevel = subprocess.run(
+        ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True, check=False,
+    )
+    if toplevel.returncode == 0 and toplevel.stdout.strip():
+        name = Path(toplevel.stdout.strip()).name
+        head = subprocess.run(
+            ["git", "-C", str(directory), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, check=False,
+        )
+        branch = head.stdout.strip() if head.returncode == 0 else ""
+    return render.meta_line(name, branch, render.today())
 
 
 if __name__ == "__main__":

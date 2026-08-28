@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from .state import Flight, StateError
@@ -42,7 +43,9 @@ def read_plan(path: str | Path) -> dict[str, Any]:
         plan = json.loads(blocks[0])
     except json.JSONDecodeError as error:
         raise PlanError(f"plan block is not valid JSON: {error}") from error
-    return _validate(plan)
+    validated = _validate(plan)
+    validated["_operator"] = _operator_contract(text, validated)
+    return validated
 
 
 def plan_blocks(text: str) -> list[str]:
@@ -142,10 +145,16 @@ def _validate(plan: Any) -> dict[str, Any]:
         raise PlanError("plan needs at least one evidence item")
     evidence_ids: set[str] = set()
     for item in evidence:
-        _require_fields(item, "evidence item", ("id", "claim", "demonstrations", "artifacts", "replay"))
+        _require_fields(item, "evidence item", ("id", "claim", "demonstrations", "artifacts", "replay", "stages"))
         if not isinstance(item["id"], str) or not item["id"].strip() or item["id"] in evidence_ids:
             raise PlanError("evidence ids must be unique non-empty strings")
         evidence_ids.add(item["id"])
+        if (
+            not isinstance(item["stages"], list)
+            or not item["stages"]
+            or any(not isinstance(value, int) or isinstance(value, bool) for value in item["stages"])
+        ):
+            raise PlanError(f"evidence item {item['id']!r} stages must be a non-empty integer list")
         for field in ("demonstrations", "artifacts"):
             if not isinstance(item[field], list) or not item[field] or any(not isinstance(value, str) or not value for value in item[field]):
                 raise PlanError(f"evidence item {item['id']!r} {field} must be a non-empty string list")
@@ -184,7 +193,211 @@ def _validate(plan: Any) -> dict[str, Any]:
         for dependency in task.get("depends_on", []):
             if dependency not in task_ids:
                 raise PlanError(f"task {task['id']} depends on unknown task {dependency}")
+    for item in evidence:
+        unknown = [stage for stage in item["stages"] if stage not in chunk_ids]
+        if unknown:
+            raise PlanError(f"evidence item {item['id']!r} names unknown stage {unknown[0]}")
     return plan
+
+
+_SECTION = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+_TITLE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
+_ROUTE = re.compile(r"^###\s+(?:Milestone|Stage)\s+(\d+)(?:\s*[\u2014:\u2013-]\s*(.+?))?\s*$", re.MULTILINE)
+_ROUTE_FIELD = re.compile(
+    r"^[-*]\s+\*\*(Produces|Unlocks|Validated by|Branch|Enables):\*\*\s*(.*)$",
+    re.IGNORECASE,
+)
+_SUB_BULLET = re.compile(r"^\s+[-*]\s+(.*?)\s*$")
+_OUTCOME = re.compile(r"^(?:If\s+)?(?P<text>.+?)\s*(?:\u2192|->)\s*(?P<then>.+?)\s*$", re.IGNORECASE)
+_DEFAULT_SUFFIX = re.compile(r"\s*\((?:the\s+)?default\)\s*$", re.IGNORECASE)
+_MILESTONE_REFERENCE = re.compile(r"\bM(\d+)\b")
+_DEFINITION_SPLIT = re.compile(r"\s+(?:\u2014|\u2013|--)\s+")
+
+# The title is the page's h1 and the operator's only handle on the flight
+# three weeks later, so it stays one readable line.
+TITLE_BUDGET = 70
+# A stage field longer than this has stopped being a causal statement and
+# has become an essay; the template asks for 220 characters.
+STAGE_FIELD_LIMIT = 400
+# The vocabulary a test-infrastructure milestone must use to say what its
+# capability is worth. Without one of these, "Enables" says nothing.
+CAPABILITY_WORDS = ("fast", "offline", "deterministic", "isolated")
+REQUIRED_STAGE_FIELDS = ("produces", "unlocks", "validated by")
+
+
+def _section_map(text: str) -> dict[str, str]:
+    matches = list(_SECTION.finditer(text))
+    sections: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections[match.group(1).strip().casefold()] = text[match.end():end].strip()
+    return sections
+
+
+def _without_plan_block(text: str) -> str:
+    output: list[str] = []
+    inside = False
+    for line in text.splitlines():
+        if not inside and line.strip() == PLAN_FENCE:
+            inside = True
+            continue
+        if inside:
+            if line.strip() == "```":
+                inside = False
+            continue
+        output.append(line)
+    return "\n".join(output)
+
+
+def _route_fields(body: str) -> dict[str, dict[str, Any]]:
+    """Each labelled line of a Route card, with any indented sub-bullets."""
+
+    fields: dict[str, dict[str, Any]] = {}
+    current: dict[str, Any] | None = None
+    for line in body.splitlines():
+        match = _ROUTE_FIELD.match(line)
+        if match:
+            current = {"head": match.group(2).strip(), "subs": []}
+            fields[match.group(1).casefold()] = current
+            continue
+        if current is None:
+            continue
+        sub = _SUB_BULLET.match(line)
+        if sub:
+            current["subs"].append(sub.group(1))
+        elif line.strip() and not line.startswith(("-", "*", "#")):
+            if current["subs"]:
+                current["subs"][-1] += " " + line.strip()
+            else:
+                current["head"] += " " + line.strip()
+        else:
+            current = None
+    return fields
+
+
+def _branch(field: dict[str, Any], milestone: int) -> dict[str, Any]:
+    """A real research fork: one question, at least two outcomes, one default."""
+
+    question = field["head"]
+    if "?" not in question:
+        raise PlanError(
+            f"Route milestone {milestone} Branch must ask what is being found out, as a question"
+        )
+    outcomes: list[dict[str, Any]] = []
+    for raw in field["subs"]:
+        is_default = bool(_DEFAULT_SUFFIX.search(raw))
+        text = _DEFAULT_SUFFIX.sub("", raw).strip()
+        if not _OUTCOME.match(text):
+            raise PlanError(
+                f"Route milestone {milestone} Branch outcome {raw!r} needs the shape "
+                "'If OUTCOME -> WHAT HAPPENS NEXT'"
+            )
+        outcomes.append({"text": text, "default": is_default})
+    if len(outcomes) < 2:
+        raise PlanError(f"Route milestone {milestone} Branch needs at least two outcomes")
+    defaults = [item for item in outcomes if item["default"]]
+    if len(defaults) != 1:
+        raise PlanError(
+            f"Route milestone {milestone} Branch needs exactly one outcome marked (default)"
+        )
+    return {"question": question, "outcomes": outcomes}
+
+
+def _enables(field: dict[str, Any], milestone: int, chunk_ids: list[int]) -> dict[str, Any]:
+    """A test-infrastructure milestone: which later stages, and what it buys them."""
+
+    text = " ".join([field["head"], *field["subs"]]).strip()
+    parts = _DEFINITION_SPLIT.split(text, maxsplit=1)
+    named = [int(value) for value in _MILESTONE_REFERENCE.findall(parts[0])]
+    if not named:
+        raise PlanError(
+            f"Route milestone {milestone} Enables must name the later milestones it makes testable"
+        )
+    for target in named:
+        if target not in chunk_ids:
+            raise PlanError(f"Route milestone {milestone} Enables names unknown milestone M{target}")
+        if target <= milestone:
+            raise PlanError(
+                f"Route milestone {milestone} Enables names M{target}, which is not a later milestone"
+            )
+    capability = parts[1] if len(parts) == 2 else ""
+    if not any(word in capability.casefold() for word in CAPABILITY_WORDS):
+        raise PlanError(
+            f"Route milestone {milestone} Enables must say what the capability gives later stages "
+            "(" + ", ".join(CAPABILITY_WORDS) + ")"
+        )
+    return {"milestones": named, "text": text}
+
+
+def _operator_contract(text: str, plan: dict[str, Any]) -> dict[str, Any]:
+    """Validate and retain the small semantic surface the approval page renders."""
+
+    body = _without_plan_block(text)
+    title = _TITLE.search(body)
+    if title and len(title.group(1)) > TITLE_BUDGET:
+        raise PlanError(
+            f"the plan title is {len(title.group(1))} characters; keep it under {TITLE_BUDGET}"
+        )
+    sections = _section_map(body)
+    route_source = sections.get("route")
+    if route_source is None:
+        raise PlanError("plan needs a ## Route section with one card per milestone")
+    chunk_ids = [item["id"] for item in plan["chunks"]]
+    matches = list(_ROUTE.finditer(route_source))
+    routes: list[dict[str, Any]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(route_source)
+        milestone = int(match.group(1))
+        fields = _route_fields(route_source[match.end():end])
+        missing = [name for name in REQUIRED_STAGE_FIELDS if not fields.get(name, {}).get("head")]
+        if missing:
+            raise PlanError(
+                f"Route milestone {milestone} needs " + ", ".join(name.title() for name in missing)
+            )
+        route: dict[str, Any] = {"id": milestone, "title": (match.group(2) or "").strip()}
+        for name in REQUIRED_STAGE_FIELDS:
+            value = fields[name]["head"]
+            if len(value) > STAGE_FIELD_LIMIT:
+                raise PlanError(
+                    f"Route milestone {milestone} {name.title()} is {len(value)} characters; "
+                    f"keep a stage field under {STAGE_FIELD_LIMIT}"
+                )
+            route[name] = value
+        if "branch" in fields:
+            route["branch"] = _branch(fields["branch"], milestone)
+        if "enables" in fields:
+            route["enables"] = _enables(fields["enables"], milestone, chunk_ids)
+        for field in fields.values():
+            for line in [field["head"], *field["subs"]]:
+                for reference in _MILESTONE_REFERENCE.findall(line):
+                    if int(reference) not in chunk_ids:
+                        raise PlanError(
+                            f"Route milestone {milestone} refers to M{reference}, which no milestone defines"
+                        )
+        routes.append(route)
+    if [item["id"] for item in routes] != chunk_ids:
+        raise PlanError(
+            "Route cards must appear once in milestone order for chunks "
+            + ", ".join(str(item) for item in chunk_ids)
+        )
+    asks = sections.get("what you will be asked", "")
+    if "approve this" not in asks.casefold():
+        raise PlanError("What you will be asked needs an Approve this route row")
+    known = {
+        "goal", "route", "shape", "human judgment", "what you will be asked",
+        "out of scope", "open questions", "rejected alternatives",
+    }
+    return {
+        "goal": sections.get("goal", ""),
+        "routes": routes,
+        "shape": sections.get("shape", ""),
+        "human_judgment": sections.get("human judgment", ""),
+        "asks": asks,
+        "out_of_scope": sections.get("out of scope", ""),
+        "open_questions": sections.get("open questions", ""),
+        "rejected_alternatives": sections.get("rejected alternatives", ""),
+        "extras": [(heading, value) for heading, value in sections.items() if heading not in known],
+    }
 
 
 def _require_fields(value: Any, kind: str, fields: tuple[str, ...]) -> None:

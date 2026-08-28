@@ -10,5 +10,5 @@ while [ -L "$script" ]; do
     esac
 done
 here=$(CDPATH= cd -- "$(dirname -- "$script")" && pwd -P)
-export PYTHONPATH="$here/../lib${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$here/../lib:$here/../../autopilot/lib${PYTHONPATH:+:$PYTHONPATH}"
 exec python3 -m handoff "$@"

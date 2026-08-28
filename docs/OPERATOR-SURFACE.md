@@ -24,6 +24,17 @@ that produced it:
   installer's messages, a tool's report — not only the process artifacts
   around the work. A product that greets its operator with a wall of text
   fails the bar the same way a readback would.
+- A plan leads with its causal route: what each milestone produces, what it
+  unlocks, any real research branch, and how that stage is validated. The
+  fundamental components, interfaces, data shapes, and proof obligations stay
+  visible; staffing, task tables, exact commands, and execution bounds remain
+  available as collapsed diagnostics.
+- Alignment and completion pages share one vocabulary and hold opposite
+  semantics. The alignment page is future tense and carries no verified state,
+  no result, and no verdict; the completion page is past tense and carries no
+  account of the process that produced it. Each page derives every fact it can
+  compute, so an agent never types a second copy of one; what a person promised
+  and what the system computed stay visually distinguishable.
 
 ## The decision-row grammar
 
@@ -87,6 +98,13 @@ Completion is proportional:
 - If behavior needs a demonstration but is easy to judge, show compact proof.
 - If work is risky, long, architectural, inbound, or difficult to judge, show
   one decision page with one independent review.
+
+The final review is bounded acceptance, not an invitation to improve the code
+indefinitely. A blocking gap makes a confirmed demonstration false, makes its
+proof unreliable, or violates a material approved constraint, and its repair
+must be proportionate to that risk. Evidence that the plan itself is wrong is
+routed through bounded planning triage; optional quality work remains a
+follow-up.
 
 Default completion surfaces contain what changed, proof, material gaps or
 decisions, and meaningful follow-ups. Tasks, chunks, dispatches, events,

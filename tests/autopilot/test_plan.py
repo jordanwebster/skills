@@ -114,6 +114,101 @@ class PlanTests(unittest.TestCase):
         parsed = read_plan(self.write(plan_markdown(plan)))
         self.assertEqual(parsed["config"]["expected_iterations"], {"min": 2, "max": 5})
 
+    def test_operator_contract_requires_causal_route_and_approval_row(self) -> None:
+        source = plan_markdown(toy_plan([task(1, "a")]))
+        with self.assertRaisesRegex(PlanError, "Validated By"):
+            read_plan(self.write(source.replace("- **Validated by:** A fast deterministic boundary check.\n", "")))
+        with self.assertRaisesRegex(PlanError, "Approve this route"):
+            read_plan(self.write(source.replace("Approve this route", "Start whenever")))
+
+    def _two_milestone_source(self, *, first_extra: str = "", second_extra: str = "") -> str:
+        plan = toy_plan(
+            [task(1, "a"), task(2, "b", chunk=2)],
+            chunks=[
+                {"id": 1, "title": "Survey", "role": "prober", "review": False},
+                {"id": 2, "title": "Build", "role": "implementer", "check": "true"},
+            ],
+        )
+        plan["evidence"][0]["stages"] = [2]
+        source = plan_markdown(plan)
+        if first_extra:
+            source = source.replace(
+                "- **Validated by:** A fast deterministic boundary check.\n\n### Milestone 2",
+                "- **Validated by:** A fast deterministic boundary check.\n" + first_extra + "\n### Milestone 2",
+            )
+        if second_extra:
+            source = source.replace(
+                "- **Validated by:** A fast deterministic boundary check.\n\n## Shape",
+                "- **Validated by:** A fast deterministic boundary check.\n" + second_extra + "\n## Shape",
+            )
+        return source
+
+    def test_a_research_branch_needs_a_question_outcomes_and_one_default(self) -> None:
+        good = self._two_milestone_source(first_extra=(
+            "- **Branch:** Which encoding is canonical?\n"
+            "  - If only the newer one appears → M2 builds one decoder (default)\n"
+            "  - If both appear → M2 splits\n"
+        ))
+        branch = read_plan(self.write(good))["_operator"]["routes"][0]["branch"]
+        self.assertEqual("Which encoding is canonical?", branch["question"])
+        self.assertEqual([True, False], [item["default"] for item in branch["outcomes"]])
+
+        with self.assertRaisesRegex(PlanError, "as a question"):
+            read_plan(self.write(good.replace("Which encoding is canonical?", "The canonical encoding.")))
+        with self.assertRaisesRegex(PlanError, "at least two outcomes"):
+            read_plan(self.write(good.replace("  - If both appear → M2 splits\n", "")))
+        with self.assertRaisesRegex(PlanError, "exactly one outcome marked"):
+            read_plan(self.write(good.replace(" (default)", "")))
+
+    def test_a_test_infrastructure_stage_names_later_milestones_and_what_it_buys(self) -> None:
+        good = self._two_milestone_source(first_extra=(
+            "- **Enables:** M2 — replayed from recorded fixtures, offline and deterministic.\n"
+        ))
+        enables = read_plan(self.write(good))["_operator"]["routes"][0]["enables"]
+        self.assertEqual([2], enables["milestones"])
+
+        with self.assertRaisesRegex(PlanError, "must name the later milestones"):
+            read_plan(self.write(good.replace("M2 — replayed", "Later work — replayed")))
+        with self.assertRaisesRegex(PlanError, "unknown milestone M7"):
+            read_plan(self.write(good.replace("M2 — replayed", "M7 — replayed")))
+        with self.assertRaisesRegex(PlanError, "what the capability gives"):
+            read_plan(self.write(good.replace("offline and deterministic", "somehow better")))
+
+    def test_a_later_stage_cannot_be_enabled_by_one_that_follows_it(self) -> None:
+        source = self._two_milestone_source(second_extra=(
+            "- **Enables:** M1 — replayed offline and deterministically.\n"
+        ))
+        with self.assertRaisesRegex(PlanError, "not a later milestone"):
+            read_plan(self.write(source))
+
+    def test_a_milestone_reference_that_names_nothing_is_rejected(self) -> None:
+        source = plan_markdown(toy_plan([task(1, "a")]))
+        source = source.replace("- **Unlocks:** The next planned boundary.", "- **Unlocks:** M4 decoding.")
+        with self.assertRaisesRegex(PlanError, "refers to M4"):
+            read_plan(self.write(source))
+
+    def test_the_title_and_stage_fields_stay_within_their_budgets(self) -> None:
+        source = plan_markdown(toy_plan([task(1, "a")]))
+        long_title = "# " + "T" * 71
+        with self.assertRaisesRegex(PlanError, "characters; keep it under 70"):
+            read_plan(self.write(source.replace("# Toy plan", long_title)))
+
+        essay = "- **Produces:** " + "word " * 90
+        with self.assertRaisesRegex(PlanError, "keep a stage field under 400"):
+            read_plan(self.write(source.replace("- **Produces:** The Files result.", essay)))
+
+
+    def test_evidence_names_every_stage_that_delivers_or_captures_it(self) -> None:
+        plan = toy_plan([task(1, "a")])
+        del plan["evidence"][0]["stages"]
+        with self.assertRaisesRegex(PlanError, "stages"):
+            read_plan(self.write(plan_markdown(plan)))
+
+        plan = toy_plan([task(1, "a")])
+        plan["evidence"][0]["stages"] = [9]
+        with self.assertRaisesRegex(PlanError, "unknown stage"):
+            read_plan(self.write(plan_markdown(plan)))
+
 
 if __name__ == "__main__":
     unittest.main()

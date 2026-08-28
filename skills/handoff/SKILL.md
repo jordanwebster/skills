@@ -54,6 +54,13 @@ result. Fix validation errors; never weaken a claim to make the command pass.
 - `proof.md` for compact proof or `handoff.html` for a decision page.
 - A stable result naming the output, commit, evidence size, gaps, and one next
   action.
+- A decision page rendered from the same operator-page primitives as
+  Autopilot approval while containing only result, proof, review, decisions,
+  and follow-ups from `proof.json`. The page derives each claim's coverage
+  state and the verdict, ask, and exposure from the bundle; no agent writes a
+  verdict. An acceptance gap stays on the claim it belongs to, a review
+  limitation is its own visible line, and follow-ups sit after the decision
+  and say they do not affect it.
 
 ## Does not own
 

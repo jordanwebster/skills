@@ -115,6 +115,26 @@ def verify_proof(inspection_path: Path, workspace: Path) -> None:
         raise AcceptanceError("final proof changed confirmed demonstrations (" + " | ".join(details) + ")")
 
 
+def verify_plan(inspection: dict[str, Any], plan: dict[str, Any]) -> None:
+    """Require the evidence plan to cover exactly the confirmed demonstrations."""
+
+    expected = {item["id"]: item["description"] for item in _demonstrations(inspection)}
+    actual = {
+        str(identifier)
+        for item in plan.get("evidence", [])
+        for identifier in item.get("demonstrations", [])
+    }
+    missing = [expected[identifier] for identifier in expected if identifier not in actual]
+    extra = sorted(actual - expected.keys())
+    if missing or extra:
+        details = []
+        if missing:
+            details.append("missing: " + "; ".join(missing))
+        if extra:
+            details.append("not accepted: " + "; ".join(extra))
+        raise AcceptanceError("plan evidence does not match confirmed demonstrations (" + " | ".join(details) + ")")
+
+
 def command(environment: Mapping[str, str] | None = None) -> list[str]:
     selected_environment = dict(os.environ if environment is None else environment)
     selected = selected_environment.get("INTAKE_COMMAND") or _bundled_intake()

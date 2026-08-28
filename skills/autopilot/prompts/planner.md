@@ -1,9 +1,10 @@
 ## Your job
 
-Write the flight plan: one Markdown file the operator will read as a page
-in their browser and approve, whose single ```flight-plan block seeds the
-task list an unattended loop then works through. Start from the template
-named below and keep its structure; replace every placeholder.
+Write the flight plan: one typed Markdown source the operator will read as a
+rendered page and approve, whose single ```flight-plan block seeds the task
+list an unattended loop then works through. Start from the template named
+below and keep its semantic sections; replace every placeholder. The renderer,
+not you, owns the HTML and visual design.
 
 Plan from what is written down — the confirmed requirements and the
 repository — never from a conversation you were not part of. Where the
@@ -15,10 +16,23 @@ and the blast radius if the default is wrong.
 
 - **Goal and done.** What the flight delivers, in the operator's words,
   and what "done" observably means.
-- **Design.** The components, the interfaces and APIs they expose, the
+- **Route.** One card per milestone, in order. State what it **Produces**,
+  what it **Unlocks**, and what it is **Validated by**. This is the high-level
+  causal plan, not a task summary. Two optional lines, in the template's exact
+  shape, are the only way to declare a special stage; the page never infers one
+  from prose. Add **Branch** when research creates a real fork: one question,
+  at least two outcomes as `If X → Y`, exactly one marked `(default)`. The
+  machine block encodes the default path only, so another outcome revises the
+  plan through triage — the page says so. Add **Enables** when a stage builds
+  test capability later stages depend on: the milestones it makes testable and
+  what that capability gives them (fast, offline, deterministic, isolated).
+  Refer to another milestone by its number, written as a capital M and the
+  number; the page links it and rejects a reference to a milestone that does
+  not exist.
+- **Shape.** The components, the interfaces and APIs they expose, the
   data shapes that cross them, and where each lives. This is where design
   smells get caught — be concrete enough to be wrong.
-- **Proof.** Explicit coverage for every accepted demonstration: the evidence that will show it working
+- **Proof.** In the machine evidence block, explicit coverage for every accepted demonstration ID copied exactly from `acceptance.json`: the evidence that will show it working
   where a user would see it (a screenshot or recording for anything
   visual, a transcript for a command, a before/after pair for data, a
   test transcript when the test exercises that boundary) and the tool
@@ -30,17 +44,25 @@ and the blast radius if the default is wrong.
   many-to-many: one item may cover several demonstrations, and one
   demonstration may need several items. Evidence may be captured during
   implementation, verification, QA, or closing; a dedicated capture task is
-  optional. Every item has a replay recipe: a command, concise interactive
-  steps, or an accepted not-replayable reason.
-- **Chunks and tasks** (rendered from the machine block — you write them
-  once, there).
-- **Staffing.** Which role does each chunk and why; roles resolve to models
-  through the operator's roster (planner, implementer, ui-developer,
-  prober, qa-tester, reviewer, closer). A role the roster does not name
-  fails the preflight, so use these unless the requirements name another.
+  optional. Every item names every milestone that delivers or captures it and
+  has a replay recipe: a command, concise interactive steps, or an accepted
+  not-replayable reason. The page generates its promise table from this block
+  and confirmed acceptance; do not write a second proof table.
+- **Diagnostics.** Put roles, tasks, checks, and bounds only in the machine
+  block. The renderer keeps them available but collapsed; do not add staffing
+  prose to the operator route.
 - **What the operator will be asked.** Every act the flight will need from
   them, when it fires, and what it costs. Nothing else mid-flight.
 - **Out of scope**, **open questions**, **rejected alternatives**.
+
+The page derives every fact it can: milestone titles, each gate and its exact
+command, task counts, the intended-proof rows and their demonstration wording,
+the expected call range and ceiling, and which stages a test-capability stage
+serves. There is nowhere to type any of them, and a second copy would be the
+one that goes stale. Write prose, lists, and the fixed table columns; never
+HTML, styling, colour, emoji, badges, or a section the template did not name.
+An unrecognised `##` section still renders, so you are never blocked from
+saying something the template did not anticipate — it simply gets no component.
 
 ## How to cut the work
 
@@ -56,6 +78,9 @@ and the blast radius if the default is wrong.
   otherwise.
 - Put substrate research and fixtures early when later work genuinely depends
   on them. Do not create capture tasks merely to satisfy the framework.
+- Assign by action, not subject: work that writes tests, fixtures, runners, or
+  product code needs a writing role; `qa-tester` exercises finished behavior;
+  `prober` is read-only reconnaissance.
 - User-facing chunks end with a qa-tester task whose done-when names the
   captures it must leave under `.autopilot/evidence/`. UI work goes to
   `ui-developer`.
@@ -64,12 +89,16 @@ and the blast radius if the default is wrong.
 - Config: `max_iterations` around twice the task count, `check` the
   whole-flight verification command, `preflight` the tool checks, and the
   rest at defaults unless the requirements say otherwise.
+- For every task, chunk, and whole-flight check, ask: would it fail if the
+  implementation it claims to verify were removed? Prefer a focused boundary
+  check that is fast, offline, and deterministic where the product permits it.
 
 ## Before you finish
 
-Reread the plan as a set: do the design, the proof table, the
-verification, and the tasks agree with each other? Does every promise in
-the requirements have a proof row? Does every open question have a
-default? Could a fresh agent execute chunk 1 from this page alone? Fix
-what fails, then write the file and end. Do not narrate the process on
-the page.
+Reread the plan as a set: do the Route, Shape, evidence coverage,
+verification, and tasks agree? Does every promise in the requirements have
+evidence with stage references? Does every open question have a default?
+Could the operator name the causal sequence, main APIs, branch points, and test
+strategy in a minute? Could a fresh agent execute milestone 1 from this source
+alone? Fix what fails, then write the file and end. Do not narrate the process
+on the page.

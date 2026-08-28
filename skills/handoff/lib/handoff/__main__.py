@@ -16,16 +16,22 @@ import tempfile
 from typing import Any
 import webbrowser
 
+from autopilot import render as operator_page
+
 
 SCHEMA_VERSION = 1
 DEFAULT_MEDIA_BUDGET = 25 * 1024 * 1024
 PLACEHOLDER_PATTERNS = (
     re.compile(r"\b(?:TODO|TBD|FIXME|XXX)\b", re.IGNORECASE),
     re.compile(r"\{\{[^}]+\}\}"),
-    re.compile(r"<[^>\n]+>"),
     re.compile(r"\?\?+"),
     re.compile(r"\blorem ipsum\b", re.IGNORECASE),
 )
+# An unfilled `<placeholder>` is one lowercase word in angle brackets. Anything
+# wider caught real prose: a claim may legitimately name Vec<Frame> or
+# Result<T, E>, and code spans are exempt outright.
+ANGLE_PLACEHOLDER = re.compile(r"<[a-z][a-z0-9_-]*>")
+CODE_SPAN = re.compile(r"`[^`]*`")
 INTERNAL_PATTERNS = (
     re.compile(r"\b(?:task|chunk|dispatch|event|acceptance|evidence)[-_ ]?id\b", re.IGNORECASE),
     re.compile(r"\b(?:dispatch|event) logs?\b", re.IGNORECASE),
@@ -44,6 +50,8 @@ def _required_text(value: Any, where: str) -> str:
     for pattern in PLACEHOLDER_PATTERNS:
         if pattern.search(text):
             raise HandoffError(f"{where} contains an unfinished placeholder")
+    if ANGLE_PLACEHOLDER.search(CODE_SPAN.sub(" ", text)):
+        raise HandoffError(f"{where} contains an unfinished placeholder")
     return text
 
 
@@ -60,6 +68,26 @@ def _text_list(value: Any, where: str, *, allow_empty: bool = True) -> list[str]
         suffix = " with at least one item" if not allow_empty else ""
         raise HandoffError(f"{where} must be a list{suffix}")
     return [_product_text(item, f"{where}[{index}]") for index, item in enumerate(value)]
+
+
+def _decisions(value: Any, where: str) -> list[Any]:
+    """A material decision is either its statement or the whole grammar:
+    what was chosen, what it was chosen over, and what it cost."""
+
+    if not isinstance(value, list):
+        raise HandoffError(f"{where} must be a list")
+    for index, item in enumerate(value):
+        place = f"{where}[{index}]"
+        if isinstance(item, str):
+            _product_text(item, place)
+            continue
+        if not isinstance(item, dict):
+            raise HandoffError(f"{place} must be text or an object")
+        _product_text(item.get("decision"), f"{place}.decision")
+        for field in ("instead_of", "cost"):
+            if item.get(field) is not None:
+                _product_text(item[field], f"{place}.{field}")
+    return value
 
 
 def _git_head(workspace: Path) -> str | None:
@@ -188,7 +216,7 @@ def validate(workspace: Path) -> tuple[dict[str, Any], int]:
         raise HandoffError(f"accepted demonstrations lack proof coverage: {names}")
 
     _text_list(bundle.get("changes"), "changes", allow_empty=False)
-    _text_list(bundle.get("decisions", []), "decisions")
+    _decisions(bundle.get("decisions", []), "decisions")
     _text_list(bundle.get("follow_ups", []), "follow_ups")
 
     if mode == "page":
@@ -255,73 +283,313 @@ def render_compact(bundle: dict[str, Any], workspace: Path) -> Path:
         lines.append(f"  Gap: {claim['gap']}")
     if bundle.get("decisions"):
         lines.extend(["", "## Decisions", ""])
-        lines.extend(f"- {item}" for item in bundle["decisions"])
+        lines.extend(
+            f"- {item if isinstance(item, str) else item['decision']}"
+            for item in bundle["decisions"]
+        )
     output = workspace / "proof.md"
     _atomic_write(output, "\n".join(lines) + "\n")
     return output
 
 
-def _artifact_html(workspace: Path, artifact: dict[str, Any]) -> str:
+def _git_context(workspace: Path) -> tuple[str, str]:
+    """Repository name and branch for the masthead's derived line."""
+
+    def run(*arguments: str) -> str:
+        completed = subprocess.run(
+            ["git", "-C", str(workspace), *arguments],
+            capture_output=True, text=True, check=False,
+        )
+        return completed.stdout.strip() if completed.returncode == 0 else ""
+
+    toplevel = run("rev-parse", "--show-toplevel")
+    return (Path(toplevel).name if toplevel else "", run("rev-parse", "--abbrev-ref", "HEAD"))
+
+
+TEXT_SUFFIXES = (".log", ".txt", ".md", ".diff", ".patch", ".out")
+# A transcript longer than this is machinery to consult, not evidence to read
+# on the way to a decision, so it goes behind a disclosure.
+INLINE_TEXT_LINES = 20
+
+
+def _artifact_view(workspace: Path, artifact: dict[str, Any]) -> dict[str, Any]:
+    """One captured artifact, classified by how the operator should meet it."""
+
     path = workspace / artifact["path"]
     mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    label = html.escape(artifact.get("label") or path.name)
+    label = artifact.get("label") or ""
+    caption = html.escape(label or path.name)
     encoded = base64.b64encode(path.read_bytes()).decode("ascii")
     source = f"data:{mime};base64,{encoded}"
     if mime.startswith("image/"):
-        return f'<figure><img src="{source}" alt="{label}"><figcaption>{label}</figcaption></figure>'
+        alt = html.escape(label or path.name, quote=True)
+        return {"placement": "card", "html": (
+            f'<figure><img src="{source}" alt="{alt}"><figcaption>{caption}</figcaption></figure>'
+        )}
     if mime.startswith("video/"):
-        return f'<figure><video controls src="{source}"></video><figcaption>{label}</figcaption></figure>'
+        return {"placement": "card", "html": (
+            f'<figure><video controls src="{source}"></video><figcaption>{caption}</figcaption></figure>'
+        )}
     if mime.startswith("audio/"):
-        return f'<figure><audio controls src="{source}"></audio><figcaption>{label}</figcaption></figure>'
-    if mime.startswith("text/") or path.suffix.lower() in (".log", ".txt", ".md"):
+        return {"placement": "card", "html": (
+            f'<figure><audio controls src="{source}"></audio><figcaption>{caption}</figcaption></figure>'
+        )}
+    if mime.startswith("text/") or path.suffix.lower() in TEXT_SUFFIXES:
         content = path.read_text(encoding="utf-8", errors="replace")
-        return f"<details><summary>{label}</summary><pre>{html.escape(content)}</pre></details>"
-    return f'<p><a download="{html.escape(path.name)}" href="{source}">{label}</a></p>'
+        lines = content.count("\n") + 1
+        body = f"<pre>{html.escape(content)}</pre>"
+        if lines <= INLINE_TEXT_LINES:
+            return {"placement": "card", "html": f"<figure>{body}<figcaption>{caption}</figcaption></figure>"}
+        return {"placement": "card", "html": operator_page.disclosure(
+            f"{label or path.name} ({lines} lines)", body, variant="inline dis--evidence",
+        )}
+    return {
+        "placement": "appendix",
+        "bytes": path.stat().st_size,
+        "html": (
+            f'<p><a download="{html.escape(path.name)}" href="{source}">{caption}</a> '
+            f"({path.stat().st_size // 1024} KB)</p>"
+        ),
+    }
+
+
+COVERAGE_MARKS = {
+    "proved": ("\u25cf", "Proved", "ok"),
+    "limited": ("\u25d0", "Proved with limits", "caution"),
+    "unproved": ("\u25cb", "Not proved", "alert"),
+}
+
+
+def _coverage(claim: dict[str, Any]) -> str:
+    """What the evidence actually establishes about one claim."""
+
+    if not claim["artifacts"]:
+        return "unproved"
+    if claim["gap"].strip().casefold() != "none":
+        return "limited"
+    if claim["replay"]["kind"] == "not_replayable":
+        return "limited"
+    return "proved"
+
+
+def _clause(text: str) -> str:
+    return text.strip().rstrip(".")
+
+
+def _join_clauses(parts: list[str]) -> str:
+    if len(parts) <= 1:
+        return "".join(parts)
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def _plural(count: int, singular: str, plural: str | None = None) -> str:
+    return singular if count == 1 else (plural or singular + "s")
+
+
+def verdict_of(bundle: dict[str, Any]) -> dict[str, Any]:
+    """Derive the verdict, the ask, and the exposure. Nobody authors a slogan."""
+
+    claims = bundle["claims"]
+    states = [_coverage(claim) for claim in claims]
+    limitations = (bundle.get("review") or {}).get("limitations") or []
+    gaps = [claim for claim in claims if claim["gap"].strip().casefold() != "none"]
+    unreplayable = [
+        claim for claim, state in zip(claims, states)
+        if state == "limited" and claim["replay"]["kind"] == "not_replayable"
+        and claim["gap"].strip().casefold() == "none"
+    ]
+
+    if "unproved" in states:
+        missing = states.count("unproved")
+        first = next(claim for claim, state in zip(claims, states) if state == "unproved")
+        key, word = "not-decidable", "Not decidable from this evidence"
+        ask = f"Do not merge yet: {_clause(first['gap'])}."
+        lead = (
+            f"{missing} of {len(claims)} {_plural(len(claims), 'claim')} "
+            f"{_plural(missing, 'is', 'are')} not shown by the evidence supplied."
+        )
+    elif gaps or unreplayable or limitations:
+        key, word = "holds-with-limits", "Holds with limits"
+        if gaps:
+            strongest = _clause(gaps[0]["gap"])
+        elif unreplayable:
+            strongest = _clause(unreplayable[0]["replay"]["limitation"])
+        else:
+            strongest = _clause(limitations[0])
+        ask = f"Merge knowing: {strongest}."
+        lead = "Every claim has supporting evidence."
+    else:
+        key, word = "holds", "Holds"
+        ask = "Merge this work."
+        lead = "Everything promised is shown, and the review reports no limitation."
+
+    qualifiers: list[str] = []
+    if gaps:
+        qualifiers.append(
+            f"{len(gaps)} {_plural(len(gaps), 'claim')} "
+            f"{_plural(len(gaps), 'carries', 'carry')} a stated gap"
+        )
+    if unreplayable:
+        qualifiers.append(
+            f"{len(unreplayable)} {_plural(len(unreplayable), 'capture')} cannot be replayed locally"
+        )
+    if limitations:
+        qualifiers.append(
+            f"the review did not cover {len(limitations)} {_plural(len(limitations), 'area')}"
+        )
+    if qualifiers:
+        lead = _clause(lead) + ", but " + _join_clauses(qualifiers) + "."
+
+    short = bundle["reviewed_commit"][:7]
+    exposure = (
+        f"{len(gaps)} {_plural(len(gaps), 'gap')} · "
+        f"{len(limitations)} review {_plural(len(limitations), 'limitation')} · "
+        f"reviewed at {short}"
+    )
+    glyph, _, role = COVERAGE_MARKS[
+        "proved" if key == "holds" else ("limited" if key == "holds-with-limits" else "unproved")
+    ]
+    return {
+        "key": key, "word": word, "glyph": glyph, "role": role,
+        "ask": ask, "lead": lead, "exposure": exposure, "states": states,
+        "gaps": len(gaps), "limitations": len(limitations),
+    }
+
+
+def _decision_row(item: Any) -> dict[str, str]:
+    if isinstance(item, str):
+        return {"thing": item}
+    derived = []
+    if item.get("instead_of"):
+        derived.append("Chosen over " + _clause(item["instead_of"]))
+    if item.get("cost"):
+        derived.append("costs " + _clause(item["cost"]))
+    return {"thing": item["decision"], "default": " · ".join(derived)}
 
 
 def render_page(bundle: dict[str, Any], workspace: Path) -> Path:
-    changes = "".join(f"<li>{html.escape(item)}</li>" for item in bundle["changes"])
-    proofs: list[str] = []
     descriptions = {item["id"]: item["description"] for item in bundle["accepted_demonstrations"]}
-    for claim in bundle["claims"]:
-        artifacts = "".join(_artifact_html(workspace, item) for item in claim["artifacts"])
-        demonstrations = ", ".join(html.escape(descriptions[item]) for item in claim["demonstrations"])
-        proofs.append(
-            f"<article><h3>{html.escape(claim['claim'])}</h3>"
-            f"<p class=promise>Shows: {demonstrations}</p>{artifacts}"
-            f"<p>{html.escape(_replay_text(claim['replay']))}</p>"
-            f"<p><strong>Gap:</strong> {html.escape(claim['gap'])}</p></article>"
-        )
     review = bundle["review"]
     limitations = review.get("limitations") or []
-    review_html = f"<p>{html.escape(review['summary'])}</p><p>Checked by {html.escape(review['reviewer'])}.</p>"
-    if limitations:
-        review_html += "<p><strong>Review limits:</strong> " + "; ".join(html.escape(item) for item in limitations) + "</p>"
-    decisions = bundle.get("decisions") or []
-    decisions_html = "".join(f"<li>{html.escape(item)}</li>" for item in decisions) or "<li>No operator decision remains.</li>"
-    follow_ups = bundle.get("follow_ups") or []
-    follow_html = ""
-    if follow_ups:
-        follow_html = "<section><h2>Follow-ups</h2><ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in follow_ups) + "</ul></section>"
-    document = f"""<!doctype html>
-<html lang=en><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
-<title>{html.escape(bundle['title'])}</title><style>
-:root{{--ink:#1d2520;--muted:#59665d;--paper:#f5f1e8;--card:#fffdfa;--accent:#155e4a;--line:#d8d1c3}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:17px/1.55 ui-sans-serif,system-ui,sans-serif}}
-main{{max-width:920px;margin:auto;padding:64px 28px 96px}}header{{border-bottom:3px solid var(--accent);padding-bottom:24px;margin-bottom:38px}}
-h1{{font:700 clamp(2rem,5vw,4rem)/1.02 ui-serif,Georgia,serif;margin:0 0 12px}}h2{{font:700 1.5rem ui-serif,Georgia,serif;margin-top:42px}}
-h3{{margin:.1rem 0 .5rem}}.commit,.promise{{color:var(--muted)}}article{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px;margin:18px 0;box-shadow:0 5px 18px #423a2d10}}
-img,video{{display:block;max-width:100%;max-height:620px;margin:16px auto;border-radius:8px}}audio{{width:100%}}figcaption{{color:var(--muted);font-size:.9rem;text-align:center}}
-pre{{overflow:auto;background:#17211c;color:#e7f3eb;padding:16px;border-radius:8px;font-size:.86rem}}code{{font-size:.9em}}li{{margin:.45rem 0}}@media(max-width:600px){{main{{padding:36px 18px 64px}}}}
-</style></head><body><main><header><h1>{html.escape(bundle['title'])}</h1><div class=commit>Proof captured at {html.escape(bundle['reviewed_commit'])}</div></header>
-<section><h2>What changed</h2><ul>{changes}</ul></section>
-<section><h2>Proof</h2>{''.join(proofs)}</section>
-<section><h2>Independent review</h2>{review_html}</section>
-<section><h2>Over to you</h2><ul>{decisions_html}</ul></section>{follow_html}
-</main></body></html>"""
+    verdict = verdict_of(bundle)
+
+    rows: list[dict[str, Any]] = []
+    appendix: list[dict[str, Any]] = []
+    for claim, state in zip(bundle["claims"], verdict["states"]):
+        glyph, word, role = COVERAGE_MARKS[state]
+        card_evidence: list[str] = []
+        for artifact in claim["artifacts"]:
+            view = _artifact_view(workspace, artifact)
+            if view["placement"] == "card":
+                card_evidence.append(view["html"])
+            else:
+                appendix.append(view)
+        gap = claim["gap"].strip()
+        stated = "No gap." if gap.casefold() == "none" else gap
+        margin = ['<p><span class="lab">Shows</span>' + "; ".join(
+            html.escape(descriptions[item]) for item in claim["demonstrations"]
+        ) + "</p>"]
+        replay = claim["replay"]
+        if replay["kind"] == "not_replayable":
+            margin.append(
+                "<p>Not replayable — " + html.escape(_clause(replay["accepted_reason"])) + ".</p>"
+            )
+        else:
+            margin.append(operator_page.disclosure(
+                "Replay", f"<pre>{html.escape(_replay_recipe(replay))}</pre>",
+            ))
+        rows.append({
+            "claim": claim["claim"],
+            "coverage": state,
+            "mark": operator_page.marker(glyph, word, role=role),
+            "gap_html": (
+                '<p class="claim__gap"><span class="lab">Gap</span>'
+                + html.escape(stated) + "</p>"
+            ),
+            "evidence_html": "".join(card_evidence),
+            "margin": margin,
+        })
+
+    name, branch = _git_context(workspace)
+    content = [operator_page.decision(
+        f'<p>{operator_page.marker(verdict["glyph"], verdict["word"], role=verdict["role"])}</p>'
+        f'<p>{html.escape(verdict["lead"])}</p>',
+        ask_label="You decide",
+        ask=verdict["ask"],
+        default="No merge, no publication",
+        exposure=verdict["exposure"],
+        variant="accept",
+    )]
+    content.append(operator_page.section(
+        "What changed",
+        "<ul>" + "".join(f"<li>{html.escape(item)}</li>" for item in bundle["changes"]) + "</ul>",
+        anchor="changed",
+    ))
+    content.append(operator_page.section(
+        "Independent review",
+        operator_page.verdict_panel(
+            summary=review["summary"],
+            attribution=f"Reviewed at {bundle['reviewed_commit'][:7]} by {review['reviewer']}.",
+            limitations=limitations,
+        ),
+        anchor="review",
+    ))
+    content.append(operator_page.section("Proof", operator_page.claim_cards(rows), anchor="proof"))
+    content.append(operator_page.section(
+        "Decisions taken",
+        operator_page.decision_rows(
+            [_decision_row(item) for item in bundle.get("decisions") or []], variant="taken"
+        ),
+        anchor="decisions",
+    ))
+    content.append(operator_page.section(
+        "Follow-ups",
+        operator_page.decision_rows(
+            [{"thing": item} for item in bundle.get("follow_ups") or []],
+            variant="followup",
+            caption="Does not affect this decision",
+        ),
+        anchor="follow-ups",
+    ))
+    if appendix:
+        total = sum(item["bytes"] for item in appendix)
+        content.append(
+            '<div class="diagnostics">' + operator_page.disclosure(
+                f"Evidence appendix ({len(appendix)} "
+                f"{_plural(len(appendix), 'file')}, {total // 1024} KB)",
+                "".join(item["html"] for item in appendix),
+                variant="block dis--evidence",
+            ) + "</div>"
+        )
+    content.append(
+        '<section class="closing" aria-labelledby="closing-heading">'
+        '<h2 class="vh" id="closing-heading">The ask</h2>'
+        + operator_page.decision_rows(
+            [{"thing": verdict["ask"], "default": "Default: no merge, no publication."}],
+            variant="taken",
+        )
+        + "</section>"
+    )
+
+    document = operator_page.document(
+        bundle["title"],
+        "\n".join(part for part in content if part),
+        surface="Handoff · merge decision",
+        meta=operator_page.meta_line(
+            name, branch, bundle["reviewed_commit"][:7], operator_page.today()
+        ),
+        style=operator_page.HANDOFF_STYLE,
+        verdict=verdict["key"],
+    )
     output = workspace / "handoff.html"
     _atomic_write(output, document)
     return output
+
+
+def _replay_recipe(replay: dict[str, Any]) -> str:
+    if replay["kind"] == "command":
+        return replay["command"]
+    return " → ".join(replay["steps"])
 
 
 def finish(args: argparse.Namespace) -> int:
@@ -330,6 +598,8 @@ def finish(args: argparse.Namespace) -> int:
         raise HandoffError(f"workspace is not a directory: {workspace}")
     bundle, media_bytes = validate(workspace)
     output = render_compact(bundle, workspace) if bundle["mode"] == "compact" else render_page(bundle, workspace)
+    if bundle["mode"] == "page":
+        result_verdict = verdict_of(bundle)["key"]
     if bundle["mode"] == "page" and not args.no_open:
         webbrowser.open(output.as_uri())
     gaps = sum(1 for claim in bundle["claims"] if claim["gap"].strip().casefold() != "none")
@@ -345,6 +615,8 @@ def finish(args: argparse.Namespace) -> int:
         "gaps": gaps,
         "next_action": next_action,
     }
+    if bundle["mode"] == "page":
+        result["verdict"] = result_verdict
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:

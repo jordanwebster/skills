@@ -47,7 +47,7 @@ revision but cannot silently change accepted outcomes or demonstrations.
   staffing digests plus confirmation time.
 - Durable untracked flight state under `.autopilot/` that any fresh agent can
   read with `autopilot status --json`.
-- Committed implementation, checks, incremental chunk reviews, evidence, and
+- Committed implementation, checks, incremental milestone reviews, evidence, and
   one closer-authored Handoff proof bundle and decision page.
 
 ## Does not own
@@ -88,6 +88,9 @@ current work, driver health, genuine questions, and its one next action.
 - The driver dispatches fresh agents and never authors product decisions.
 - It re-runs task and chunk checks itself, records state atomically, and seeds
   a plan only once.
+- When a milestone's tasks finish, its bounded check, review, repairs, and
+  recheck run before dependent implementation. A blocked milestone does not
+  prevent dependency-safe later work.
 - Restart recovers durable in-progress work and accepts a task whose check
   already passes instead of dispatching it twice.
 - Configuration failures stop immediately with one recovery action and consume
@@ -107,6 +110,13 @@ current work, driver health, genuine questions, and its one next action.
 - Every completed claim names accepted demonstrations, current artifacts, a
   replay recipe (command, steps, or accepted not-replayable reason), and an
   explicit gap or complete coverage.
+- The closer performs bounded acceptance against the confirmed promise and
+  current evidence, not an open-ended code review. Genuine gaps become tracked
+  repair work and are audited again after completion; optional quality work is
+  parked. A discovery that invalidates a planning assumption goes through one
+  planner triage, which may reshape implementation work but must promote any
+  change to accepted outcomes or material design. The approved iteration
+  ceiling, rather than an audit-round counter, bounds convergence.
 
 Workers use `autopilot task list | show | start | done | note | add | edit |
 park | unpark | reset`. They request decision triage with `autopilot

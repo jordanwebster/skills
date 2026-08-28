@@ -4,12 +4,23 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[2]
 HANDOFF = ROOT / "skills" / "handoff" / "scripts" / "handoff"
+
+sys.path.insert(0, str(ROOT / "tests"))
+
+from pagecheck import Page, assert_operator_page
+
+# Autopilot's process vocabulary. A merge decision is made from the result and
+# its review; how the work was scheduled is not the operator's business here.
+PROCESS_WORDS = (
+    "milestone", "chunk", "task", "dispatch", "iteration", "reviewer round", ".autopilot",
+)
 
 
 class HandoffCliTests(unittest.TestCase):
@@ -102,14 +113,20 @@ class HandoffCliTests(unittest.TestCase):
         self.assertIn("[Checkout transcript](captures/result.txt)", proof)
         self.assertNotIn("retry, single", proof)
 
-    def test_page_requires_and_renders_fresh_review(self) -> None:
-        completed = self.run_handoff(self.bundle("page"))
+    def page_for(self, bundle: dict) -> str:
+        completed = self.run_handoff(bundle)
         self.assertEqual(0, completed.returncode, completed.stderr or completed.stdout)
-        page = (self.workspace / "handoff.html").read_text(encoding="utf-8")
+        return (self.workspace / "handoff.html").read_text(encoding="utf-8")
+
+    def test_page_requires_and_renders_fresh_review(self) -> None:
+        page = self.page_for(self.bundle("page"))
+        assert_operator_page(self, page)
+        self.assertIn("Handoff · merge decision", page)
         self.assertIn("Independent review", page)
+        self.assertIn("The implementation and supplied proof hold.", page)
         self.assertIn("A timed-out checkout can be retried", page)
         self.assertIn("request succeeded once", page)
-        self.assertNotIn("dispatch logs", page)
+        self.assertIn(self.commit[:7], page)
 
         stale = self.bundle("page")
         stale["review"]["reviewed_commit"] = "0" * 40
@@ -119,6 +136,119 @@ class HandoffCliTests(unittest.TestCase):
         self.assertEqual("invalid_work", error["error"]["class"])
         self.assertIn("stale", error["error"]["message"])
         self.assertIn("run handoff finish again", error["error"]["recovery"])
+
+    def test_the_verdict_and_the_ask_are_derived_from_the_evidence(self) -> None:
+        holds = Page(self.page_for(self.bundle("page")))
+        self.assertIn('data-verdict="holds"', holds.source)
+        self.assertIn("Merge this work.", holds.source)
+        self.assertIn("0 gaps · 0 review limitations", holds.source)
+        self.assertIn("The review reports no limitation.", holds.source)
+
+        limited = self.bundle("page")
+        limited["review"]["limitations"] = ["the Windows path"]
+        page = self.page_for(limited)
+        self.assertIn('data-verdict="holds-with-limits"', page)
+        self.assertIn("Every claim has supporting evidence", page)
+        self.assertNotIn("Everything promised is shown", page)
+        self.assertIn("Merge knowing: the Windows path.", page)
+        self.assertIn("The review did not cover: the Windows path.", page)
+        self.assertIn("0 gaps · 1 review limitation", page)
+
+        blocked = self.bundle("page")
+        blocked["claims"][0]["artifacts"] = []
+        blocked["claims"][0]["gap"] = "The retry was never run against a real timeout"
+        page = self.page_for(blocked)
+        self.assertIn('data-verdict="not-decidable"', page)
+        self.assertIn("Do not merge yet: The retry was never run against a real timeout.", page)
+        self.assertIn("No merge, no publication", page)
+
+    def test_every_claim_carries_a_coverage_state_and_an_explicit_gap(self) -> None:
+        bundle = self.bundle("page")
+        bundle["claims"].append({
+            "claim": "The retry remains available after the timeout.",
+            "demonstrations": ["retry"],
+            "artifacts": bundle["claims"][0]["artifacts"],
+            "replay": {"kind": "steps", "steps": ["Open checkout", "Choose Retry"]},
+            "gap": "Only the supplied fixture was exercised",
+        })
+        page = Page(self.page_for(bundle))
+        claims = page.with_class("claim")
+        self.assertEqual(["proved", "limited"], [item["data-coverage"] for item in claims])
+        self.assertIn("Proved with limits", page.source)
+        self.assertIn("No gap.", page.source)
+        self.assertIn("Only the supplied fixture was exercised", page.source)
+        self.assertLess(
+            page.source.index("Only the supplied fixture"),
+            page.source.index("Open checkout"),
+            "the gap is read before the evidence, not after it",
+        )
+
+    def test_unlabelled_image_evidence_has_a_filename_alt(self) -> None:
+        image = self.workspace / "captures" / "result.png"
+        image.write_bytes(b"not a real png")
+        bundle = self.bundle("page")
+        bundle["claims"][0]["artifacts"] = [{"path": "captures/result.png"}]
+        page = self.page_for(bundle)
+        self.assertIn('alt="result.png"', page)
+
+    def test_a_not_replayable_capture_holds_with_limits_without_a_gap(self) -> None:
+        bundle = self.bundle("page")
+        bundle["claims"][0]["replay"] = {
+            "kind": "not_replayable",
+            "accepted_reason": "The operator accepted a production-only observation.",
+            "limitation": "It cannot be recreated locally.",
+        }
+        page = Page(self.page_for(bundle))
+        self.assertEqual(["limited"], [item["data-coverage"] for item in page.with_class("claim")])
+        self.assertIn("Merge knowing: It cannot be recreated locally.", page.source)
+        self.assertIn("0 gaps · 0 review limitations", page.source)
+
+    def test_follow_ups_are_visibly_outside_the_decision(self) -> None:
+        bundle = self.bundle("page")
+        bundle["decisions"] = [{
+            "decision": "Unknown responses surface as a typed unknown result.",
+            "instead_of": "dropping them",
+            "cost": "one additional public variant",
+        }]
+        bundle["follow_ups"] = ["Record a Windows fixture set."]
+        page = Page(self.page_for(bundle))
+        self.assertIn("Decisions taken", page.source)
+        self.assertIn("Chosen over dropping them · costs one additional public variant", page.source)
+        self.assertIn("Does not affect this decision", page.source)
+        self.assertLess(
+            page.source.index("Decisions taken"), page.source.index("Follow-ups")
+        )
+        taken = page.source[page.source.index('rows rows--taken'):]
+        self.assertNotIn("Record a Windows fixture set.", taken.split("</ul>")[0])
+
+    def test_a_page_with_nothing_optional_omits_those_sections(self) -> None:
+        page = self.page_for(self.bundle("page"))
+        self.assertNotIn("Decisions taken", page)
+        self.assertNotIn("Follow-ups", page)
+        self.assertNotIn("Evidence appendix", page)
+        self.assertNotIn("No further product decision remains", page)
+
+    def test_the_page_says_nothing_about_how_the_work_was_run(self) -> None:
+        bundle = self.bundle("page")
+        bundle["decisions"] = ["Kept the existing retry window."]
+        bundle["follow_ups"] = ["Record a Windows fixture set."]
+        page = self.page_for(bundle).casefold()
+        for word in PROCESS_WORDS:
+            self.assertNotIn(word, page, word)
+
+    def test_the_first_change_is_stated_once(self) -> None:
+        page = self.page_for(self.bundle("page"))
+        self.assertEqual(1, page.count("Timed-out checkout attempts can now be retried safely."))
+
+    def test_a_claim_may_name_a_real_generic_type(self) -> None:
+        bundle = self.bundle()
+        bundle["claims"][0]["claim"] = "A retry returns Result<Charge, RetryError> once."
+        self.assertEqual(0, self.run_handoff(bundle).returncode)
+
+        bundle["claims"][0]["claim"] = "A retry returns <result> once."
+        failed = self.run_handoff(bundle)
+        self.assertEqual(1, failed.returncode)
+        self.assertIn("placeholder", json.loads(failed.stdout)["error"]["message"])
 
     def test_rejects_uncovered_acceptance_and_unknown_ids(self) -> None:
         bundle = self.bundle()

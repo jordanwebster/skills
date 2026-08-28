@@ -83,9 +83,14 @@ Final all-ok: CONFIRMED
         self.assertEqual(planned.returncode, 0, planned.stderr)
         page = (self.root / ".autopilot" / "flight-plan.html").read_text()
         self.assertIn("<title>Toy plan</title>", page)
-        self.assertIn("Resolved staffing", page)
+        self.assertIn("Autopilot · plan approval", page)
+        self.assertIn("autopilot/build-the-toy", page, "the masthead names the branch it plans")
+        self.assertIn('<h2 id="route">Route</h2>', page)
+        self.assertIn("A fast deterministic boundary check", page)
+        self.assertIn("Intended proof", page)
+        self.assertIn("<summary>Staffing (4 roles)</summary>", page)
         self.assertIn("generic/fake", page)
-        self.assertIn("<details><summary>Implementation diagnostics</summary>", page)
+        self.assertIn("<summary>Tasks by milestone (2 tasks)</summary>", page)
         self.assertIn("<td>first</td>", page, "task detail remains available only in diagnostics")
         needs_approval = json.loads(self.cli("status", "--json").stdout)
         self.assertEqual(needs_approval["readiness"]["state"], "needs_approval")
@@ -112,10 +117,11 @@ Final all-ok: CONFIRMED
             time.sleep(0.5)
         self.assertEqual(flight.data["status"], "landed")
         status = self.cli("status")
-        self.assertIn("landed", status.stdout)
+        self.assertIn("proof ready", status.stdout)
         self.assertIn("Next: read the completion page.", status.stdout)
         self.assertEqual(status.stdout.count("Next:"), 1)
         status_json = json.loads(self.cli("status", "--json").stdout)
+        self.assertEqual(status_json["phase"], "proof ready")
         self.assertEqual(status_json["next_action"]["kind"], "read_completion")
         self.assertEqual(self.cli("start").returncode, 1, "a landed flight cannot restart")
         self.assertIn("No driver is running", self.cli("stop").stdout)
@@ -142,7 +148,7 @@ Final all-ok: CONFIRMED
         self.assertEqual(rendered.returncode, 0, rendered.stderr)
         html = (self.base / "front-page.html").read_text()
         self.assertIn("<title>Widget fix</title>", html)
-        self.assertIn("<h3>WHAT CHANGED</h3>", html)
+        self.assertIn("<h2>WHAT CHANGED</h2>", html)
         self.assertIn("<li>two</li>", html)
 
     def test_task_verbs(self) -> None:
@@ -260,6 +266,88 @@ Final all-ok: CONFIRMED
         flight.load()
         self.assertEqual(flight.data["status"], "stopped")
         self.assertLessEqual(flight.data["iteration"], 2)
+
+
+
+class StatusPhaseTests(FlightCase):
+    """The status line reports what the flight is actually doing, and only
+    offers actions a command implements."""
+
+    def phase(self, flight, **state) -> str:
+        from autopilot.__main__ import _flight_phase
+
+        return _flight_phase(
+            flight,
+            active=state.get("active", []),
+            questions=state.get("questions", []),
+            readiness=state.get("readiness", {"state": "ready_to_start"}),
+        )
+
+    def test_the_phase_follows_durable_state(self) -> None:
+        plan = toy_plan(
+            [task(1, "first"), task(2, "second", chunk=2)],
+            chunks=[
+                {"id": 1, "title": "Files", "check": "true", "review": True},
+                {"id": 2, "title": "More", "review": False},
+            ],
+        )
+        flight = self.seed(plan)
+        self.assertEqual(self.phase(flight), "ready to start", "before takeoff, readiness is the phase")
+
+        flight.data["status"] = "running"
+        self.assertEqual(self.phase(flight, active=[flight.task(1)]), "implementing")
+
+        flight.set_status(flight.task(1), "done")
+        self.assertEqual(self.phase(flight), "reviewing milestone 1")
+
+        repair = flight.add_task("Fix a review finding", chunk=1, origin="review")
+        self.assertEqual(self.phase(flight), "repairing milestone 1")
+        flight.set_status(repair, "done")
+
+        flight.chunk(1)["reviewed"] = True
+        for chunk in flight.chunks:
+            chunk["status"] = "done"
+        self.assertEqual(self.phase(flight), "acceptance audit")
+
+        gap = flight.add_task("Close the acceptance gap", chunk=2, origin="closer")
+        self.assertEqual(self.phase(flight), "repairing acceptance")
+        flight.set_status(gap, "done")
+
+        flight.data["status"] = "landed"
+        self.assertEqual(self.phase(flight), "proof ready")
+
+        flight.data["status"] = "running"
+        self.assertEqual(
+            self.phase(flight, questions=[{"id": 1}]), "needs operator"
+        )
+
+    def test_every_offered_action_names_a_command_that_exists(self) -> None:
+        """An escalation that recommends an action no verb implements leaves the
+        operator editing state by hand, which is how the last flight ended."""
+
+        import inspect
+        import re
+
+        from autopilot.__main__ import _status_payload, build_parser
+
+        autopilot_verbs = {
+            choice
+            for action in build_parser()._subparsers._group_actions
+            for choice in action.choices
+        }
+        delegate = subprocess.run(
+            [str(SKILL_DIR.parent / "delegate" / "scripts" / "delegate"), "--help"],
+            capture_output=True, text=True, check=True, timeout=30,
+        ).stdout
+        offered = re.findall(
+            r'"command": f?"(autopilot|delegate) ([a-z-]+)', inspect.getsource(_status_payload)
+        )
+        self.assertGreaterEqual(len(offered), 8, "every branch offers one next action")
+        for command, verb in offered:
+            if command == "autopilot":
+                self.assertIn(verb, autopilot_verbs, f"{command} {verb}")
+            else:
+                self.assertIn(verb, delegate, f"{command} {verb}")
 
 
 if __name__ == "__main__":
