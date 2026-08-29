@@ -38,20 +38,25 @@ milestone by its number, written as a capital M and the number.
 The page derives each milestone's gate, its exact command, and its task count
 from the machine block. Do not write them here.
 
-## Shape
+## Interfaces
 
-### Components
+One group per component: its name, what it owns and where it lives, then the
+surface it exposes — the types it defines and the functions it offers, together.
+Write the surface as code in the language being built, one declaration per line,
+with what it promises as a comment above it. Real types and real error results;
+a signature that cannot be wrong has not said anything.
 
-- **COMPONENT** — what it owns, where it lives (`path/`), and what it depends on.
+### COMPONENT — what it owns; lives in `path/`
 
-### Interfaces and APIs
+```LANGUAGE
+// What this is, who produces it and who consumes it.
+struct Shape {
+    field: Type,
+}
 
-- `signature or endpoint` — what it promises, its inputs and outputs, and its
-  error behaviour.
-
-### Data shapes
-
-- **SHAPE** — fields, where it is produced, and where it is consumed.
+// What it promises, and what it does when it cannot.
+fn name(input: Type) -> Result<Output, Error>;
+```
 
 ## Human judgment
 

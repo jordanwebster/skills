@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from autopilot.plan import PlanError, plan_roles, read_plan, seed_flight
+from autopilot.plan import shape_groups, PlanError, plan_roles, read_plan, seed_flight
 from autopilot.state import Flight
 
 from helpers import SKILL_DIR, plan_markdown, task, toy_plan
@@ -121,24 +121,36 @@ class PlanTests(unittest.TestCase):
         with self.assertRaisesRegex(PlanError, "Approve this route"):
             read_plan(self.write(source.replace("Approve this route", "Start whenever")))
 
-    def test_a_plan_without_a_shape_is_not_a_design(self) -> None:
+    def test_a_plan_without_interfaces_is_not_a_design(self) -> None:
         source = plan_markdown(toy_plan([task(1, "a")]))
-        shape = source[source.index("## Shape"):source.index("## Human judgment")]
-        with self.assertRaisesRegex(PlanError, "needs a ## Shape section"):
-            read_plan(self.write(source.replace(shape, "")))
+        block = source[source.index("## Interfaces"):source.index("## Human judgment")]
+        with self.assertRaisesRegex(PlanError, "needs an ## Interfaces section"):
+            read_plan(self.write(source.replace(block, "")))
 
-    def test_a_shape_names_components_interfaces_and_data(self) -> None:
+    def test_interfaces_must_state_a_surface_as_code(self) -> None:
         source = plan_markdown(toy_plan([task(1, "a")]))
-        with self.assertRaisesRegex(PlanError, r"### Data shapes"):
-            read_plan(self.write(source.replace(
-                "### Data shapes\n\n- **Result** — the text the toy produced.\n", ""
-            )))
-        with self.assertRaisesRegex(PlanError, r"### Interfaces and APIs"):
-            read_plan(self.write(source.replace(
-                "- `toy()` — returns the result, never raises.\n", ""
-            )))
+        # Prose about a design is not a design: at least one component has to
+        # state its surface in the language being built.
+        prose = source.replace(
+            "```python\n"
+            "# The text the toy produced.\n"
+            "class Result:\n"
+            "    text: str\n"
+            "\n"
+            "# Returns the result, never raises.\n"
+            "def toy() -> Result: ...\n"
+            "```",
+            "- **toy** — returns the result, never raises.",
+        )
+        with self.assertRaisesRegex(PlanError, "fenced code block"):
+            read_plan(self.write(prose))
+
         contract = read_plan(self.write(source))["_operator"]
-        self.assertIn("### Components", contract["shape"])
+        self.assertIn("### Toy — owns the result", contract["shape"])
+        groups = shape_groups(contract["shape"])
+        self.assertEqual(["Toy"], [group.name for group in groups])
+        self.assertEqual("owns the result; lives in `toy/`", groups[0].note)
+        self.assertEqual("python", groups[0].language)
 
     def _two_milestone_source(self, *, first_extra: str = "", second_extra: str = "") -> str:
         plan = toy_plan(
@@ -157,8 +169,8 @@ class PlanTests(unittest.TestCase):
             )
         if second_extra:
             source = source.replace(
-                "- **Validated by:** A fast deterministic boundary check.\n\n## Shape",
-                "- **Validated by:** A fast deterministic boundary check.\n" + second_extra + "\n## Shape",
+                "- **Validated by:** A fast deterministic boundary check.\n\n## Interfaces",
+                "- **Validated by:** A fast deterministic boundary check.\n" + second_extra + "\n## Interfaces",
             )
         return source
 

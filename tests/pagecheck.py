@@ -63,7 +63,9 @@ class Page(HTMLParser):
             self._section_depth = self._depth
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self.handle_starttag(tag, attrs)
+        # A self-closing tag opens and closes at once, so it must not move the
+        # depth the section tracker reads. Inline SVG is full of them.
+        self.elements.append((tag, {name: (value or "") for name, value in attrs}))
 
     def handle_endtag(self, tag: str) -> None:
         if tag not in VOID_TAGS:
@@ -101,6 +103,22 @@ class Page(HTMLParser):
 
     def all_text(self) -> str:
         return " ".join(self.text)
+
+    def readable(self) -> str:
+        """Everything a reader can reach: text, and the attributes that carry
+        words — alt text, link destinations, download names, titles.
+
+        Deliberately not the raw source. The stylesheet embeds the page's
+        typefaces as base64, and a megabyte of base64 contains every short
+        letter sequence somewhere by chance, so a vocabulary check against the
+        bytes tests the fonts rather than the page."""
+
+        wordy = ("alt", "href", "title", "download", "aria-label", "summary")
+        attributes = [
+            value for _, values in self.elements
+            for name, value in values.items() if name in wordy
+        ]
+        return " ".join(self.text + attributes)
 
     def outside_details(self) -> str:
         return " ".join(self.open_text)
@@ -165,12 +183,21 @@ def assert_operator_page(case, source: str) -> Page:
         r"prefers-reduced-motion:reduce\)\{\*,\*::before,\*::after",
     )
 
+    # A CSS escape written with one backslash too few is read by Python as an
+    # octal escape, and the declaration still parses — it just draws a control
+    # character where a glyph belongs. Nothing else would catch that.
+    stray = {
+        character for character in page.stylesheet()
+        if ord(character) < 32 and character not in "\n\t"
+    }
+    case.assertEqual(set(), stray, "a control character reached the stylesheet")
+
     case.assertEqual(1, len(page.with_class("decision")), "exactly one decision component")
     for label, body in page.sections:
         case.assertTrue("".join(body).strip(), f"section {label!r} rendered an empty body")
 
     tables = [tag for tag, _ in page.elements if tag == "table"]
-    case.assertEqual(len(tables), source.count("<caption>"), "every table is captioned")
+    case.assertEqual(len(tables), source.count("<caption"), "every table is captioned")
     if tables:
         case.assertEqual(
             source.count("<th"), source.count('<th scope="col"'), "every header cell has a scope"

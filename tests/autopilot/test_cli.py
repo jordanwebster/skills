@@ -85,13 +85,15 @@ Final all-ok: CONFIRMED
         self.assertIn("<title>Toy plan</title>", page)
         self.assertIn("Autopilot · plan approval", page)
         self.assertIn("autopilot/build-the-toy", page, "the masthead names the branch it plans")
-        self.assertIn('<h2 id="route">Route</h2>', page)
+        self.assertIn('<h2 id="route"><span class="kicker">Route</span>1 milestone</h2>', page,
+                      "a section names itself and says what it turned out to hold")
         self.assertIn("A fast deterministic boundary check", page)
         self.assertIn("Intended proof", page)
         self.assertIn("<summary>Staffing (4 roles)</summary>", page)
         self.assertIn("generic/fake", page)
         self.assertIn("<summary>Tasks by milestone (2 tasks)</summary>", page)
-        self.assertIn("<td>first</td>", page, "task detail remains available only in diagnostics")
+        self.assertIn('<td data-label="Task">first</td>', page,
+                      "task detail remains available only in diagnostics")
         needs_approval = json.loads(self.cli("status", "--json").stdout)
         self.assertEqual(needs_approval["readiness"]["state"], "needs_approval")
 

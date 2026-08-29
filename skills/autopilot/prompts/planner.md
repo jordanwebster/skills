@@ -15,7 +15,10 @@ and the blast radius if the default is wrong.
 ## What the page must let the operator judge
 
 - **Goal and done.** What the flight delivers, in the operator's words,
-  and what "done" observably means.
+  and what "done" observably means. The opening paragraph becomes the page's
+  standfirst, directly under the title, so make it stand alone: one statement
+  of what the operator gets, with no lead-in and nothing it depends on having
+  read. Everything after it is read beside the ask.
 - **Route.** One card per milestone, in order. State what it **Produces**,
   what it **Unlocks**, and what it is **Validated by**. This is the high-level
   causal plan, not a task summary. Two optional lines, in the template's exact
@@ -29,11 +32,21 @@ and the blast radius if the default is wrong.
   Refer to another milestone by its number, written as a capital M and the
   number; the page links it and rejects a reference to a milestone that does
   not exist.
-- **Shape.** The components, the interfaces and APIs they expose, the
-  data shapes that cross them, and where each lives. This is where design
-  smells get caught — be concrete enough to be wrong. All three groups are
-  required, under the sub-headings the template uses, each with at least one
-  entry; a plan missing one is rejected.
+- **Interfaces.** One group per component, headed `### Name — what it owns;
+  lives in `path/``, and carrying that component's whole surface: the types it
+  defines and the functions it offers, in one block. This is where design
+  smells get caught — be concrete enough to be wrong. At least one group is
+  required and at least one must be code; a plan that describes its design only
+  in prose is rejected.
+
+  Write the surface as a fenced code block in the language being built, tagged
+  on the fence (` ```rust `, ` ```python `, ` ```typescript `), one declaration
+  per line, with the contract as a comment above each. Real parameter types and
+  real error results — a reviewer should be able to disagree with a signature.
+  Comments are set apart from declarations on the page, so put the promise in
+  the comment and the shape in the code. Group by component, not by kind: a
+  reader judging the recorder should not have to visit three lists to see it.
+
 - **Proof.** In the machine evidence block, explicit coverage for every accepted demonstration ID copied exactly from `acceptance.json`: the evidence that will show it working
   where a user would see it (a screenshot or recording for anything
   visual, a transcript for a command, a before/after pair for data, a
@@ -97,7 +110,7 @@ saying something the template did not anticipate — it simply gets no component
 
 ## Before you finish
 
-Reread the plan as a set: do the Route, Shape, evidence coverage,
+Reread the plan as a set: do the Route, Interfaces, evidence coverage,
 verification, and tasks agree? Does every promise in the requirements have
 evidence with stage references? Does every open question have a default?
 Could the operator name the causal sequence, main APIs, branch points, and test

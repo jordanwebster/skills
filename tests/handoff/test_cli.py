@@ -175,13 +175,71 @@ class HandoffCliTests(unittest.TestCase):
         claims = page.with_class("claim")
         self.assertEqual(["proved", "limited"], [item["data-coverage"] for item in claims])
         self.assertIn("Proved with limits", page.source)
-        self.assertIn("No gap.", page.source)
-        self.assertIn("Only the supplied fixture was exercised", page.source)
+        # State and gap are one line, so a claim with nothing missing costs one
+        # clause rather than a labelled paragraph repeated down the page.
+        self.assertIn('<span class="claim__gap">no gap</span>', page.source)
+        self.assertIn("gap: Only the supplied fixture was exercised", page.source)
         self.assertLess(
             page.source.index("Only the supplied fixture"),
             page.source.index("Open checkout"),
             "the gap is read before the evidence, not after it",
         )
+
+    def test_the_finding_stands_in_the_masthead_and_the_block_holds_the_action(self) -> None:
+        page = self.page_for(self.bundle("page"))
+        masthead = page[page.index('class="masthead"'):page.index("<main>")]
+        self.assertIn(
+            '<p class="standfirst">Everything promised is shown, and the review reports '
+            "no limitation.</p>",
+            masthead,
+        )
+        self.assertEqual(1, page.count("Everything promised is shown"))
+        decision = page[page.index('class="decision'):page.index("</section>")]
+        self.assertIn("Merge this work.", decision)
+        self.assertIn("Holds", decision)
+
+    def test_the_masthead_states_the_numbers_before_any_prose(self) -> None:
+        bundle = self.bundle("page")
+        bundle["claims"].append({
+            "claim": "The retry remains available after the timeout.",
+            "demonstrations": ["retry"],
+            "artifacts": bundle["claims"][0]["artifacts"],
+            "replay": {"kind": "steps", "steps": ["Open checkout", "Choose Retry"]},
+            "gap": "Only the supplied fixture was exercised",
+        })
+        page = self.page_for(bundle)
+        strip = page[page.index('class="metrics"'):]
+        strip = strip[:strip.index("</dl>")]
+        self.assertIn("<dt>Claims</dt><dd>2</dd>", strip)
+        self.assertIn("<dt>Shown</dt><dd>1<span>of 2</span></dd>", strip)
+        # A count that is not zero is the one the reader must not miss.
+        self.assertIn('<dt>Gaps</dt><dd data-tone="caution">1</dd>', strip)
+        self.assertIn("<dt>Review limits</dt><dd>0</dd>", strip)
+        self.assertLess(page.index('class="metrics"'), page.index('class="decision'))
+
+    def test_a_state_is_a_word_in_a_chip_not_a_colour(self) -> None:
+        page = self.page_for(self.bundle("page"))
+        self.assertIn('<span class="tag tag--ok">Proved</span>', page)
+        self.assertIn('<span class="tag tag--ok">Holds</span>', page)
+        self.assertNotIn("aria-hidden", page, "no glyph is doing work the word already does")
+
+    def test_each_accepted_demonstration_a_claim_answers_to_gets_its_own_line(self) -> None:
+        page = self.page_for(self.bundle("page"))
+        shows = page[page.index('class="shows"'):]
+        shows = shows[:shows.index("</div>")]
+        self.assertIn("<li>A timed-out checkout can be retried</li>", shows)
+        self.assertIn("<li>The retry produces one charge</li>", shows)
+        self.assertNotIn(";", shows, "a list is a list, not one line with separators")
+
+    def test_a_section_names_itself_and_says_what_it_holds(self) -> None:
+        page = self.page_for(self.bundle("page"))
+        self.assertIn('<span class="kicker">Proof</span>1 claim, all shown</h2>', page)
+        self.assertIn('<span class="kicker">Independent review</span>Nothing left uncovered</h2>', page)
+
+        limited = self.bundle("page")
+        limited["review"]["limitations"] = ["the Windows path"]
+        page = self.page_for(limited)
+        self.assertIn('<span class="kicker">Independent review</span>1 area not covered</h2>', page)
 
     def test_unlabelled_image_evidence_has_a_filename_alt(self) -> None:
         image = self.workspace / "captures" / "result.png"
@@ -213,13 +271,18 @@ class HandoffCliTests(unittest.TestCase):
         bundle["follow_ups"] = ["Record a Windows fixture set."]
         page = Page(self.page_for(bundle))
         self.assertIn("Decisions taken", page.source)
-        self.assertIn("Chosen over dropping them · costs one additional public variant", page.source)
+        # What a decision was chosen over and what it cost are columns, not a
+        # run-on line with a separator standing in for the column boundary.
+        for column in ("Decision", "Chosen over", "What it cost"):
+            self.assertIn(f'<th scope="col">{column}</th>', page.source)
+        self.assertIn('<td data-label="Chosen over">dropping them</td>'
+                      '<td data-label="What it cost">one additional public variant</td>', page.source)
         self.assertIn("Does not affect this decision", page.source)
         self.assertLess(
             page.source.index("Decisions taken"), page.source.index("Follow-ups")
         )
-        taken = page.source[page.source.index('rows rows--taken'):]
-        self.assertNotIn("Record a Windows fixture set.", taken.split("</ul>")[0])
+        taken = page.source[page.source.index('rows--taken'):]
+        self.assertNotIn("Record a Windows fixture set.", taken.split("</table>")[0])
 
     def test_a_page_with_nothing_optional_omits_those_sections(self) -> None:
         page = self.page_for(self.bundle("page"))
@@ -232,7 +295,7 @@ class HandoffCliTests(unittest.TestCase):
         bundle = self.bundle("page")
         bundle["decisions"] = ["Kept the existing retry window."]
         bundle["follow_ups"] = ["Record a Windows fixture set."]
-        page = self.page_for(bundle).casefold()
+        page = Page(self.page_for(bundle)).readable().casefold()
         for word in PROCESS_WORDS:
             self.assertNotIn(word, page, word)
 

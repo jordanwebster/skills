@@ -371,9 +371,9 @@ def _artifact_view(workspace: Path, artifact: dict[str, Any]) -> dict[str, Any]:
 
 
 COVERAGE_MARKS = {
-    "proved": ("\u25cf", "Proved", "ok"),
-    "limited": ("\u25d0", "Proved with limits", "caution"),
-    "unproved": ("\u25cb", "Not proved", "alert"),
+    "proved": ("Proved", "ok"),
+    "limited": ("Proved with limits", "caution"),
+    "unproved": ("Not proved", "alert"),
 }
 
 
@@ -463,25 +463,41 @@ def verdict_of(bundle: dict[str, Any]) -> dict[str, Any]:
         f"{len(limitations)} review {_plural(len(limitations), 'limitation')} · "
         f"reviewed at {short}"
     )
-    glyph, _, role = COVERAGE_MARKS[
+    _, role = COVERAGE_MARKS[
         "proved" if key == "holds" else ("limited" if key == "holds-with-limits" else "unproved")
     ]
     return {
-        "key": key, "word": word, "glyph": glyph, "role": role,
+        "key": key, "word": word, "role": role,
         "ask": ask, "lead": lead, "exposure": exposure, "states": states,
         "gaps": len(gaps), "limitations": len(limitations),
     }
 
 
-def _decision_row(item: Any) -> dict[str, str]:
+DECISION_COLUMNS = ("Decision", "Chosen over", "What it cost")
+
+
+def _decision_row(item: Any) -> dict[str, Any]:
     if isinstance(item, str):
-        return {"thing": item}
-    derived = []
-    if item.get("instead_of"):
-        derived.append("Chosen over " + _clause(item["instead_of"]))
-    if item.get("cost"):
-        derived.append("costs " + _clause(item["cost"]))
-    return {"thing": item["decision"], "default": " · ".join(derived)}
+        return {"thing": item, "parts": {}}
+    return {
+        "thing": item["decision"],
+        "parts": {
+            "Chosen over": _clause(item.get("instead_of") or ""),
+            "What it cost": _clause(item.get("cost") or ""),
+        },
+    }
+
+
+def _proof_headline(states: list[str]) -> str:
+    """What the evidence came to, counted from the evidence."""
+
+    total = len(states)
+    shown = states.count("proved")
+    if shown == total:
+        return f"{total} {_plural(total, 'claim')}, all shown"
+    if shown:
+        return f"{shown} of {total} shown outright"
+    return f"{total} {_plural(total, 'claim')}, none shown outright"
 
 
 def render_page(bundle: dict[str, Any], workspace: Path) -> Path:
@@ -493,7 +509,7 @@ def render_page(bundle: dict[str, Any], workspace: Path) -> Path:
     rows: list[dict[str, Any]] = []
     appendix: list[dict[str, Any]] = []
     for claim, state in zip(bundle["claims"], verdict["states"]):
-        glyph, word, role = COVERAGE_MARKS[state]
+        word, role = COVERAGE_MARKS[state]
         card_evidence: list[str] = []
         for artifact in claim["artifacts"]:
             view = _artifact_view(workspace, artifact)
@@ -502,35 +518,49 @@ def render_page(bundle: dict[str, Any], workspace: Path) -> Path:
             else:
                 appendix.append(view)
         gap = claim["gap"].strip()
-        stated = "No gap." if gap.casefold() == "none" else gap
-        margin = ['<p><span class="lab">Shows</span>' + "; ".join(
-            html.escape(descriptions[item]) for item in claim["demonstrations"]
-        ) + "</p>"]
+        # The state and the gap are one fact about the evidence. Said as two
+        # labelled blocks, "No gap." repeats down a page of proved claims and
+        # buries the one claim that does have something missing.
+        stated = (
+            "no gap" if gap.casefold() == "none"
+            else "gap: " + _clause(gap)
+        )
+        foot: list[str] = []
         replay = claim["replay"]
         if replay["kind"] == "not_replayable":
-            margin.append(
+            foot.append(
                 "<p>Not replayable — " + html.escape(_clause(replay["accepted_reason"])) + ".</p>"
             )
         else:
-            margin.append(operator_page.disclosure(
+            foot.append(operator_page.disclosure(
                 "Replay", f"<pre>{html.escape(_replay_recipe(replay))}</pre>",
             ))
         rows.append({
             "claim": claim["claim"],
             "coverage": state,
-            "mark": operator_page.marker(glyph, word, role=role),
-            "gap_html": (
-                '<p class="claim__gap"><span class="lab">Gap</span>'
-                + html.escape(stated) + "</p>"
+            "mark": operator_page.chip(word, role=role),
+            "gap_html": f'<span class="claim__gap">{html.escape(stated)}</span>',
+            "shows_html": operator_page.shows_list(
+                "Shows", [descriptions[item] for item in claim["demonstrations"]]
             ),
             "evidence_html": "".join(card_evidence),
-            "margin": margin,
+            "foot": foot,
         })
 
+    shown = verdict["states"].count("proved")
+    strip = operator_page.metrics([
+        ("Claims", str(len(bundle["claims"])), "", ""),
+        ("Shown", str(shown), f"of {len(bundle['claims'])}", ""),
+        ("Gaps", str(verdict["gaps"]), "", "caution" if verdict["gaps"] else ""),
+        ("Review limits", str(verdict["limitations"]), "",
+         "caution" if verdict["limitations"] else ""),
+        ("Changes", str(len(bundle["changes"])), "", ""),
+    ])
     name, branch = _git_context(workspace)
+    # The finding is what the page is about, so it stands in the masthead where
+    # a reader meets it first; the block below is the action it leads to.
     content = [operator_page.decision(
-        f'<p>{operator_page.marker(verdict["glyph"], verdict["word"], role=verdict["role"])}</p>'
-        f'<p>{html.escape(verdict["lead"])}</p>',
+        f'<p>{operator_page.chip(verdict["word"], role=verdict["role"])}</p>',
         ask_label="You decide",
         ask=verdict["ask"],
         default="No merge, no publication",
@@ -550,12 +580,23 @@ def render_page(bundle: dict[str, Any], workspace: Path) -> Path:
             limitations=limitations,
         ),
         anchor="review",
+        headline=(
+            "Nothing left uncovered" if not limitations
+            else f"{len(limitations)} {_plural(len(limitations), 'area')} not covered"
+        ),
     ))
-    content.append(operator_page.section("Proof", operator_page.claim_cards(rows), anchor="proof"))
+    content.append(operator_page.section(
+        "Proof", operator_page.claim_cards(rows), anchor="proof",
+        headline=_proof_headline(verdict["states"]),
+    ))
+    decisions = [_decision_row(item) for item in bundle.get("decisions") or []]
     content.append(operator_page.section(
         "Decisions taken",
         operator_page.decision_rows(
-            [_decision_row(item) for item in bundle.get("decisions") or []], variant="taken"
+            decisions,
+            variant="taken",
+            columns=DECISION_COLUMNS if any(row["parts"] for row in decisions) else (),
+            label="Decisions taken",
         ),
         anchor="decisions",
     ))
@@ -564,7 +605,7 @@ def render_page(bundle: dict[str, Any], workspace: Path) -> Path:
         operator_page.decision_rows(
             [{"thing": item} for item in bundle.get("follow_ups") or []],
             variant="followup",
-            caption="Does not affect this decision",
+            note="Does not affect this decision",
         ),
         anchor="follow-ups",
     ))
@@ -582,7 +623,7 @@ def render_page(bundle: dict[str, Any], workspace: Path) -> Path:
         '<section class="closing" aria-labelledby="closing-heading">'
         '<h2 class="vh" id="closing-heading">The ask</h2>'
         + operator_page.decision_rows(
-            [{"thing": verdict["ask"], "default": "Default: no merge, no publication."}],
+            [{"thing": verdict["ask"], "note": "Default: no merge, no publication."}],
             variant="taken",
         )
         + "</section>"
@@ -592,6 +633,8 @@ def render_page(bundle: dict[str, Any], workspace: Path) -> Path:
         bundle["title"],
         "\n".join(part for part in content if part),
         surface="Handoff · merge decision",
+        standfirst=html.escape(verdict["lead"]),
+        summary=strip,
         meta=operator_page.meta_line(
             name, branch, bundle["reviewed_commit"][:7], operator_page.today()
         ),

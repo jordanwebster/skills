@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 from .state import Flight, StateError
 
@@ -225,29 +225,69 @@ CAPABILITY_WORDS = ("fast", "offline", "deterministic", "isolated")
 REQUIRED_STAGE_FIELDS = ("produces", "unlocks", "validated by")
 
 
-_SHAPE_GROUP = re.compile(r"^#{3,6}\s+(.+?)\s*$", re.MULTILINE)
+_SHAPE_GROUP = re.compile(r"^#{3,6}[ \t]+([^\n]+?)[ \t]*$", re.MULTILINE)
 _SHAPE_ENTRY = re.compile(r"^\s*[-*]\s+(.*)$")
 _SHAPE_SPLIT = re.compile(r"\s+(?:—|–|--)\s+")
-# What every Shape must name before the operator can judge a design: the parts,
-# the surfaces between them, and what travels across those surfaces. A plan that
-# names fewer has not said what it intends to build.
-REQUIRED_SHAPE_GROUPS = ("Components", "Interfaces and APIs", "Data shapes")
+_SHAPE_CODE = re.compile(r"^```([\w+#.-]*)[^\n]*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
+_SHAPE_NOTE = re.compile(r"\s+(?:—|–|--)\s+")
 
 
-def shape_groups(source: str) -> list[tuple[str, list[tuple[str, str]]]]:
-    """The Shape section as named groups of term-and-definition entries.
+class ShapeGroup(NamedTuple):
+    """One component's surface: its name, what it owns, and what it exposes."""
 
-    A group is a sub-heading; an entry is a bullet, split on an em dash into
-    the thing and what it is. Groups with no entries are not groups."""
+    name: str
+    note: str
+    entries: list[tuple[str, str]]
+    language: str
+    code: str
 
-    matches = list(_SHAPE_GROUP.finditer(source))
+    def __bool__(self) -> bool:
+        return bool(self.entries or self.code)
+
+
+def _mask_fences(source: str) -> str:
+    """The source with fenced code blanked out, keeping every offset.
+
+    A group heading is found on the masked copy so that a `### ` inside a code
+    block — a comment in a shell or Python signature — is read as code rather
+    than as a new group."""
+
+    masked = list(source)
+    for match in _SHAPE_CODE.finditer(source):
+        for index in range(match.start(), match.end()):
+            if masked[index] != "\n":
+                masked[index] = "x"
+    return "".join(masked)
+
+
+def shape_groups(source: str) -> list[ShapeGroup]:
+    """The Shape section as named groups.
+
+    A group is a sub-heading. Its body is either bullets — each split on an em
+    dash into the thing and what it is — or a fenced code block, which is how
+    an interface is written: a signature is code, and prose that describes a
+    signature instead of showing it is prose the reader has to compile. Groups
+    with neither are not groups."""
+
+    masked = _mask_fences(source)
+    matches = list(_SHAPE_GROUP.finditer(masked))
     if not matches:
         return []
-    groups: list[tuple[str, list[tuple[str, str]]]] = []
+    groups: list[ShapeGroup] = []
     for index, match in enumerate(matches):
         end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+        body = source[match.end():end]
+        name = match.group(1).strip()
+
+        fence = _SHAPE_CODE.search(body)
+        if fence is not None:
+            code = fence.group(2).rstrip()
+            if code.strip():
+                groups.append(ShapeGroup(*_split_note(name), [], fence.group(1).strip().casefold(), code))
+                continue
+
         entries: list[tuple[str, str]] = []
-        for line in source[match.end():end].splitlines():
+        for line in body.splitlines():
             entry = _SHAPE_ENTRY.match(line)
             if not entry:
                 continue
@@ -257,24 +297,44 @@ def shape_groups(source: str) -> list[tuple[str, list[tuple[str, str]]]]:
             else:
                 entries.append((entry.group(1).strip(), ""))
         if entries:
-            groups.append((match.group(1).strip(), entries))
+            groups.append(ShapeGroup(*_split_note(name), entries, "", ""))
     return groups
 
 
+def _split_note(heading: str) -> tuple[str, str]:
+    """A group heading is `Name — what it owns and where it lives`."""
+
+    parts = _SHAPE_NOTE.split(heading, maxsplit=1)
+    return (parts[0].strip(), parts[1].strip()) if len(parts) == 2 else (heading.strip(), "")
+
+
 def _shape(source: str | None) -> str:
+    """Validate the Interfaces section.
+
+    One group per component, each headed `Name — what it owns`, each carrying
+    that component's surface. The old three-group split (components, then
+    interfaces, then data shapes) made a reader assemble one component from
+    three places; a signature written in the target language already names the
+    types that cross it, so the split bought nothing the code does not say.
+
+    At least one group must be code: a design described only in prose has not
+    named a surface anyone can disagree with."""
+
     if source is None or not source.strip():
         raise PlanError(
-            "plan needs a ## Shape section with a "
-            + ", ".join(REQUIRED_SHAPE_GROUPS)
-            + " group"
+            "plan needs an ## Interfaces section with one `### Name — what it owns` "
+            "group per component"
         )
-    present = {title.casefold() for title, _ in shape_groups(source)}
-    missing = [name for name in REQUIRED_SHAPE_GROUPS if name.casefold() not in present]
-    if missing:
+    groups = [group for group in shape_groups(source) if group]
+    if not groups:
         raise PlanError(
-            "## Shape needs a non-empty "
-            + ", ".join(f"### {name}" for name in missing)
-            + " group, each listing entries as `- **thing** — what it is`"
+            "## Interfaces needs at least one `### Name — what it owns` group, "
+            "each carrying that component's surface"
+        )
+    if not any(group.code for group in groups):
+        raise PlanError(
+            "## Interfaces needs at least one group written as a fenced code block: "
+            "state the surface in the language being built, not in prose about it"
         )
     return source
 
@@ -438,13 +498,13 @@ def _operator_contract(text: str, plan: dict[str, Any]) -> dict[str, Any]:
     if "approve this" not in asks.casefold():
         raise PlanError("What you will be asked needs an Approve this route row")
     known = {
-        "goal", "route", "shape", "human judgment", "what you will be asked",
+        "goal", "route", "shape", "interfaces", "human judgment", "what you will be asked",
         "out of scope", "open questions", "rejected alternatives",
     }
     return {
         "goal": sections.get("goal", ""),
         "routes": routes,
-        "shape": _shape(sections.get("shape")),
+        "shape": _shape(sections.get("interfaces") or sections.get("shape")),
         "human_judgment": sections.get("human judgment", ""),
         "asks": asks,
         "out_of_scope": sections.get("out of scope", ""),
