@@ -531,9 +531,17 @@ class Driver:
     def _commit_leftovers(self, message: str) -> None:
         """Commit product changes an agent left uncommitted so nothing is lost.
 
-        Flight state is untracked, so the only thing that can be dirty here is
-        the product; a clean tree commits nothing."""
+        Flight state must be ignored and untracked. Both invariants are checked
+        immediately before staging; a clean product tree commits nothing."""
 
+        gitops.require_ignored(self.flight.root, ".autopilot/.autopilot-ignore-probe")
+        tracked = gitops.tracked_paths(self.flight.root, ".autopilot")
+        if tracked:
+            sample = ", ".join(tracked[:3])
+            suffix = " …" if len(tracked) > 3 else ""
+            raise gitops.GitError(
+                f"checkpoint refused because flight state is tracked: {sample}{suffix}"
+            )
         if gitops.is_dirty(self.flight.root):
             gitops.commit_all(self.flight.root, message)
 

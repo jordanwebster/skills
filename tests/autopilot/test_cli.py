@@ -139,9 +139,26 @@ Final all-ok: CONFIRMED
         self.assertTrue((exports[0] / "handoff.html").is_file())
         self.assertEqual(git(self.root, "status", "--porcelain").strip(), "")
         self.assertNotIn("flight", git(self.root, "log", "--oneline").casefold())
+        exclude_path = self.root / git(self.root, "rev-parse", "--git-path", "info/exclude").strip()
+        self.assertEqual(exclude_path.read_text().splitlines().count(".autopilot/"), 1)
         after = self.cli("status")
         self.assertEqual(after.returncode, 1)
         self.assertIn("no flight found", after.stderr)
+
+    def test_land_refuses_to_remove_tracked_flight_state(self) -> None:
+        flight = self.seed(toy_plan([task(1, "first")]))
+        flight.data["status"] = "landed"
+        flight.save()
+        tracked = flight.dir / "tracked.txt"
+        tracked.write_text("must not be deleted\n")
+        git(self.root, "add", "-f", ".autopilot/tracked.txt")
+        git(self.root, "commit", "-q", "-m", "Track flight state")
+
+        landed = self.cli("land")
+        self.assertEqual(landed.returncode, 1)
+        self.assertIn("cannot land while flight state is tracked", landed.stderr)
+        self.assertTrue(flight.dir.is_dir())
+        self.assertTrue(tracked.is_file())
 
     def test_page_renders_markdown(self) -> None:
         source = self.base / "front-page.md"

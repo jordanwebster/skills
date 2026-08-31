@@ -52,6 +52,23 @@ def commit_all(root: Path, message: str) -> str | None:
     return head(root)
 
 
+def tracked_paths(root: Path, pathspec: str) -> list[str]:
+    """Return tracked paths matching a repository-relative pathspec."""
+
+    return [line for line in git(root, "ls-files", "--", pathspec).splitlines() if line]
+
+
+def require_ignored(root: Path, path: str) -> None:
+    """Raise unless Git confirms that a repository-relative path is ignored."""
+
+    try:
+        git(root, "check-ignore", "-q", "--", path)
+    except GitError as error:
+        raise GitError(
+            f"Git does not ignore {path}; refusing to expose private flight state"
+        ) from error
+
+
 def ensure_branch(root: Path, branch: str) -> None:
     """Check the flight branch out, creating it from HEAD if it does not exist."""
 
@@ -65,21 +82,28 @@ def ensure_branch(root: Path, branch: str) -> None:
 
 
 def exclude(root: Path, pattern: str) -> None:
-    """Add a pattern to the repository-local exclude file, once."""
+    """Add and verify a pattern in Git's repository-local exclude file."""
 
-    info = root / ".git" / "info"
-    if not info.is_dir():
-        git_dir = Path(git(root, "rev-parse", "--git-dir").strip())
-        info = (root / git_dir if not git_dir.is_absolute() else git_dir) / "info"
-    info.mkdir(parents=True, exist_ok=True)
-    path = info / "exclude"
-    existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    if pattern in existing.splitlines():
-        return
-    with path.open("a", encoding="utf-8") as handle:
-        if existing and not existing.endswith("\n"):
-            handle.write("\n")
-        handle.write(pattern + "\n")
+    resolved = Path(git(root, "rev-parse", "--git-path", "info/exclude").strip())
+    path = resolved if resolved.is_absolute() else root / resolved
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+        if pattern not in existing.splitlines():
+            with path.open("a", encoding="utf-8") as handle:
+                if existing and not existing.endswith("\n"):
+                    handle.write("\n")
+                handle.write(pattern + "\n")
+    except OSError as error:
+        raise GitError(f"cannot update Git exclude file {path}: {error}") from error
+
+    probe = f"{pattern.rstrip('/')}/.autopilot-ignore-probe"
+    try:
+        require_ignored(root, probe)
+    except GitError as error:
+        raise GitError(
+            f"Git did not ignore {probe} after updating {path}; refusing to use private flight state"
+        ) from error
 
 
 def diff_stat(root: Path, base: str, target: str = "HEAD") -> str:

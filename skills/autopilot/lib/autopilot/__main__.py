@@ -277,6 +277,12 @@ def cmd_init(args: argparse.Namespace) -> int:
     inspection = acceptance.inspect(args.requirements, receipt)
     branch = args.branch or f"autopilot/{_slug(args.goal)}"
     gitops.exclude(root, ".autopilot/")
+    tracked_flight_state = gitops.tracked_paths(root, ".autopilot")
+    if tracked_flight_state:
+        raise StateError(
+            f"flight state is already tracked ({tracked_flight_state[0]}); "
+            "remove .autopilot from the index before starting"
+        )
     if gitops.is_dirty(root):
         raise StateError("the working tree is dirty; commit or stash before starting a flight")
     gitops.ensure_branch(root, branch)
@@ -822,6 +828,12 @@ def cmd_land(args: argparse.Namespace) -> int:
         raise StateError(f"the flight is {flight.data['status']}, not landed; nothing to tidy yet")
     if supervise.locked_owner(flight.runtime_dir):
         raise StateError("a driver is still running; stop it first")
+    tracked_flight_state = gitops.tracked_paths(flight.root, ".autopilot")
+    if tracked_flight_state:
+        raise StateError(
+            f"cannot land while flight state is tracked ({tracked_flight_state[0]}); "
+            "remove .autopilot from the index and history first"
+        )
     follow_ups = flight.parked_tasks()
     handoff = flight.data.get("handoff") or {}
     reviewed_commit = str(handoff.get("reviewed_commit") or "unknown")
