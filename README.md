@@ -32,5 +32,5 @@ skill in its own words.
 
 Install every skill into Claude and Codex with `./install.sh` — it also links
 the `intake`, `delegate`, `autopilot`, `handoff`, and `tasks` commands into
-`~/.local/bin`; add
-`--agent-config` to symlink the global agent configuration.
+`~/.local/bin`. The global agent configuration lives in the `dotfiles` repo
+and is installed by its own `install.sh`.

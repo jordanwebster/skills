@@ -5,26 +5,19 @@ repo_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 skills_root=$repo_root/skills
 
 action=install
-agent_config=false
 requested_count=0
 selected_count=0
 requested_skills=()
 selected_paths=()
 
 usage() {
-    echo "usage: ./install.sh [--uninstall] [--agent-config] [skill ...]"
-    echo "  --agent-config  install config/global-agents.md as the global"
-    echo "                  ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md (symlinks);"
-    echo "                  with no skill arguments, installs only the config"
+    echo "usage: ./install.sh [--uninstall] [skill ...]"
 }
 
 while [ "$#" -gt 0 ]; do
     case $1 in
         --uninstall)
             action=uninstall
-            ;;
-        --agent-config)
-            agent_config=true
             ;;
         -h|--help)
             usage
@@ -51,65 +44,6 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
-
-config_source=$repo_root/config/global-agents.md
-
-agent_config_file() {
-    destination=$1
-
-    if [ "$action" = uninstall ]; then
-        if [ -L "$destination" ] && [ "$destination" -ef "$config_source" ]; then
-            if rm "$destination"; then
-                echo "REMOVED: $destination"
-            else
-                echo "LEFT UNTOUCHED: could not remove $destination" >&2
-            fi
-        elif [ -e "$destination" ] || [ -L "$destination" ]; then
-            echo "LEFT UNTOUCHED: $destination is not a link owned by this checkout"
-        else
-            echo "ALREADY ABSENT: $destination"
-        fi
-        return
-    fi
-
-    if [ -L "$destination" ]; then
-        if [ "$destination" -ef "$config_source" ]; then
-            echo "ALREADY CORRECT: $destination"
-        else
-            echo "REFUSED: $destination is a symlink to another target" >&2
-        fi
-        return
-    fi
-
-    if [ -e "$destination" ]; then
-        echo "REFUSED: $destination exists and is not a symlink (move it aside first)" >&2
-        return
-    fi
-
-    destination_root=${destination%/*}
-    if ! mkdir -p "$destination_root"; then
-        echo "REFUSED: could not create parent directory $destination_root" >&2
-        return
-    fi
-
-    if ln -s "$config_source" "$destination"; then
-        echo "CREATED: $destination -> $config_source"
-    else
-        echo "REFUSED: could not create $destination" >&2
-    fi
-}
-
-if $agent_config; then
-    if [ ! -f "$config_source" ]; then
-        echo "missing $config_source" >&2
-        exit 1
-    fi
-    agent_config_file "${HOME:?HOME is required for --agent-config}/.claude/CLAUDE.md"
-    agent_config_file "$HOME/.codex/AGENTS.md"
-    if [ "$requested_count" -eq 0 ]; then
-        exit 0
-    fi
-fi
 
 add_selected_skill() {
     candidate=$1
